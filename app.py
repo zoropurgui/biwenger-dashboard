@@ -141,7 +141,7 @@ if standings:
     df_standings["Valor Total (€)"] = df_standings["Valor Equipo (€)"] + df_standings["Dinero en Caja (€)"]
     df_standings["Puja Máxima (€)"] = df_standings["Dinero en Caja (€)"] + (0.25 * df_standings["Valor Equipo (€)"])
 
-    tab1, tab2 = st.tabs(["📊 Clasificación y Rivales", "👤 Mi Financiera"])
+    tab1, tab2 = st.tabs(["📊 Clasificación y Rivales", "👤 Mi Equipo"])
 
     with tab1:
         st.write("### 👥 Clasificación y Estado Financiero de Rivales")
