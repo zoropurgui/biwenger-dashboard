@@ -68,7 +68,7 @@ standings = league_data.get("standings", [])
 
 def parse_entry(entry):
     if not isinstance(entry, dict):
-        return {"ID User": None, "Usuario": "Desconocido", "Puntos": 0, "Valor Equipo (€)": 0, "Restante / Saldo (€)": 0}
+        return {"ID User": None, "Usuario": "Desconocido", "Puntos": 0, "Valor Equipo (€)": 0, "Dinero en Caja (€)": 0}
     
     user_obj = entry.get("user") if isinstance(entry.get("user"), dict) else {}
     
@@ -101,7 +101,7 @@ def parse_entry(entry):
     if val is None:
         val = user_obj.get("teamValue", 0)
 
-    # Saldo
+    # Saldo / Dinero en caja
     bal = entry.get("balance")
     if bal is None:
         bal = user_obj.get("balance", 0)
@@ -111,23 +111,57 @@ def parse_entry(entry):
         "Usuario": str(name),
         "Puntos": int(points or 0),
         "Valor Equipo (€)": float(val or 0),
-        "Restante / Saldo (€)": float(bal or 0)
+        "Dinero en Caja (€)": float(bal or 0)
     }
 
 if standings:
     rivals_list = [parse_entry(e) for e in standings]
     df_standings = pd.DataFrame(rivals_list)
 
+    # --- CÁLCULOS SOLICITADOS ---
+    df_standings["Posición"] = range(1, len(df_standings) + 1)
+    df_standings["Valor Total (€)"] = df_standings["Valor Equipo (€)"] + df_standings["Dinero en Caja (€)"]
+    df_standings["Puja Máxima (€)"] = df_standings["Dinero en Caja (€)"] + (0.25 * df_standings["Valor Equipo (€)"])
+
     tab1, tab2 = st.tabs(["📊 Clasificación y Rivales", "👤 Mi Financiera"])
 
     with tab1:
-        st.write("### 👥 Todos los participantes de la liga")
-        
-        df_display = df_standings.copy()
-        df_display["Valor Equipo (€)"] = df_display["Valor Equipo (€)"].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
-        df_display["Restante / Saldo (€)"] = df_display["Restante / Saldo (€)"].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
+        st.write("### 👥 Clasificación y Estado Financiero de Rivales")
 
-        st.dataframe(df_display[["Usuario", "Puntos", "Valor Equipo (€)", "Restante / Saldo (€)"]], use_container_width=True)
+        # Seleccionar y reordenar columnas
+        cols_order = [
+            "Posición",
+            "Usuario",
+            "Puntos",
+            "Valor Equipo (€)",
+            "Dinero en Caja (€)",
+            "Valor Total (€)",
+            "Puja Máxima (€)"
+        ]
+        
+        df_table = df_standings[cols_order].copy()
+
+        # Función para aplicar estilo rojo si el dinero en caja es menor que 0
+        def color_negative_red(val):
+            if isinstance(val, (int, float)) and val < 0:
+                return 'color: #ff4b4b; font-weight: bold;'
+            return ''
+
+        # Aplicar el estilo
+        if hasattr(df_table.style, "map"):
+            styler = df_table.style.map(color_negative_red, subset=["Dinero en Caja (€)"])
+        else:
+            styler = df_table.style.applymap(color_negative_red, subset=["Dinero en Caja (€)"])
+
+        # Formatear números con estilo de moneda
+        styler = styler.format({
+            "Valor Equipo (€)": lambda x: f"{x:,.0f} €".replace(",", "."),
+            "Dinero en Caja (€)": lambda x: f"{x:,.0f} €".replace(",", "."),
+            "Valor Total (€)": lambda x: f"{x:,.0f} €".replace(",", "."),
+            "Puja Máxima (€)": lambda x: f"{x:,.0f} €".replace(",", ".")
+        })
+
+        st.dataframe(styler, use_container_width=True, hide_index=True)
 
     with tab2:
         st.write("### 💰 Análisis Individual")
@@ -147,13 +181,15 @@ if standings:
         user_row = df_standings[df_standings["Usuario"] == selected_user].iloc[0]
         
         val_team = user_row["Valor Equipo (€)"]
-        bal_team = user_row["Restante / Saldo (€)"]
-        max_bid = bal_team + (val_team * 0.25) if bal_team > 0 else val_team * 0.25
+        bal_team = user_row["Dinero en Caja (€)"]
+        val_total = user_row["Valor Total (€)"]
+        max_bid = user_row["Puja Máxima (€)"]
 
-        col1, col2, col3 = st.columns(3)
-        col1.metric("💰 Saldo Registrado", f"{bal_team:,.0f} €".replace(",", "."))
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("💰 Dinero en Caja", f"{bal_team:,.0f} €".replace(",", "."))
         col2.metric("📊 Valor de Plantilla", f"{val_team:,.0f} €".replace(",", "."))
-        col3.metric("🔥 Puja Máx. Estimada", f"{max_bid:,.0f} €".replace(",", "."))
+        col3.metric("🏆 Valor Total", f"{val_total:,.0f} €".replace(",", "."))
+        col4.metric("🔥 Puja Máx. Estimada", f"{max_bid:,.0f} €".replace(",", "."))
 
 else:
     st.warning("No se encontraron datos de clasificación en esta liga.")
