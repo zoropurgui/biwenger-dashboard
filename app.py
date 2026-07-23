@@ -4,7 +4,7 @@ import requests
 
 st.set_page_config(page_title="Biwenger Dashboard", page_icon="⚽", layout="wide")
 
-st.title("⚽ Biwenger League & Finance Dashboard")
+st.title("⚽ Liga Biwenger de Polola")
 
 # --- SIDEBAR: Credenciales ---
 st.sidebar.header("🔑 Credenciales de Biwenger")
@@ -144,7 +144,7 @@ if standings:
     tab1, tab2 = st.tabs(["📊 Clasificación y Rivales", "👤 Mi Equipo"])
 
     with tab1:
-        st.write("### 👥 Clasificación y Estado Financiero de Rivales")
+        st.write("### 👥 Clasificación y VM de Rivales")
 
         cols_order = [
             "Posición",
