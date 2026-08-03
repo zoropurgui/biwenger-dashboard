@@ -13,12 +13,21 @@ token = st.sidebar.text_input("Bearer Token", type="password", help="Tu token de
 league_id = st.sidebar.text_input("League ID", help="ID numérico de tu liga")
 user_id = st.sidebar.text_input("User ID (Opcional)", help="Tu ID de usuario para resaltar tu equipo")
 
-st.sidebar.header("⚙️ Configuración de Liga")
+st.sidebar.header("⚙️ Configuración Financiera")
 initial_budget = st.sidebar.number_input(
     "Presupuesto Total Inicial (€)", 
     value=40000000, 
     step=1000000, 
     help="Reparto inicial del 31 de julio: 40M (Plantilla + Caja)"
+)
+
+max_bid_pct = st.sidebar.slider(
+    "Crédito sobre VM para Puja Máx. (%)", 
+    min_value=0.0, 
+    max_value=100.0, 
+    value=25.0, 
+    step=1.0,
+    help="Regla oficial de Biwenger: 25% del Valor de Plantilla (0.25)"
 )
 
 if not token or not league_id:
@@ -31,6 +40,24 @@ if clean_token.lower().startswith("bearer "):
 
 clean_league_id = str(league_id).strip()
 clean_user_id = str(user_id).strip() if user_id else ""
+
+# --- FUNCIÓN AUXILIAR: Extracción recursiva del Valor de Plantilla ---
+def extract_team_value(obj):
+    if isinstance(obj, (int, float)):
+        return float(obj)
+    if isinstance(obj, dict):
+        for k in ["teamValue", "team_value", "value", "price"]:
+            if k in obj and isinstance(obj[k], (int, float)) and obj[k] > 0:
+                return float(obj[k])
+        if "team" in obj and obj["team"]:
+            val = extract_team_value(obj["team"])
+            if val > 0:
+                return val
+        if "players" in obj and isinstance(obj["players"], list):
+            return sum(extract_team_value(p) for p in obj["players"])
+    if isinstance(obj, list):
+        return sum(extract_team_value(item) for item in obj)
+    return 0.0
 
 @st.cache_data(ttl=60)
 def fetch_league_data(tok, l_id, u_id):
@@ -47,58 +74,73 @@ def fetch_league_data(tok, l_id, u_id):
 
     data = {}
     errors = []
-    
-    # 1. Obtener la liga global
-    url_league = "https://biwenger.as.com/api/v2/league?fields=*,users(*,team),standings(*,user,team)"
-    try:
-        resp = requests.get(url_league, headers=headers, timeout=10)
-        if resp.status_code == 200:
-            data = resp.json().get("data", {})
-        else:
-            # Reintento simple si falla el selector complejo
-            resp_s = requests.get("https://biwenger.as.com/api/v2/league", headers=headers, timeout=10)
-            if resp_s.status_code == 200:
-                data = resp_s.json().get("data", {})
-            else:
-                errors.append(f"HTTP {resp.status_code} en /league")
-    except Exception as e:
-        errors.append(f"Error en /league: {str(e)}")
 
-    users_list = data.get("users", []) or data.get("standings", [])
+    # 1. Intentar endpoints globales de liga
+    league_urls = [
+        f"https://biwenger.as.com/api/v2/league?fields=*,users(*,team),standings(*,user,team)",
+        f"https://biwenger.as.com/api/v2/league/users?fields=*,team",
+        f"https://biwenger.as.com/api/v2/league/standings?fields=*,team"
+    ]
     
-    # 2. Consultar perfil de cada mánager solicitando explícitamente el objeto 'team'
+    users_list = []
+    for url in league_urls:
+        try:
+            resp = requests.get(url, headers=headers, timeout=8)
+            if resp.status_code == 200:
+                res_json = resp.json().get("data", {})
+                if isinstance(res_json, dict):
+                    data.update(res_json)
+                    found_users = res_json.get("users", []) or res_json.get("standings", [])
+                    if found_users:
+                        users_list = found_users
+                        break
+                elif isinstance(res_json, list):
+                    users_list = res_json
+                    break
+        except Exception as e:
+            errors.append(f"Error en {url}: {str(e)}")
+
+    # 2. Consultar perfiles individuales con fallbacks
     detailed_users = []
     for u in users_list:
         if not isinstance(u, dict):
             continue
+        
         uid = u.get("id") or (u.get("user", {}).get("id") if isinstance(u.get("user"), dict) else None)
         u_info = dict(u)
-        
-        # Conservar el saldo si venía en la respuesta global (p. ej. tu usuario)
+
         if "balance" in u and u["balance"] is not None:
             u_info["real_balance"] = u["balance"]
 
         if uid:
-            # Solicitamos los campos extendidos con ?fields=*,team
-            url_user = f"https://biwenger.as.com/api/v2/user/{uid}?fields=*,team"
-            try:
-                time.sleep(0.15)  # Evita saturar peticiones
-                resp_u = requests.get(url_user, headers=headers, timeout=5)
-                if resp_u.status_code == 200:
-                    u_data = resp_u.json().get("data", {})
-                    u_info["detailed_user_data"] = u_data
-                    if "balance" in u_data and u_data["balance"] is not None:
-                        u_info["real_balance"] = u_data.get("balance")
-                else:
-                    errors.append(f"HTTP {resp_u.status_code} al consultar mánager ID {uid}")
-            except Exception as e:
-                errors.append(f"Error red mánager ID {uid}: {str(e)}")
-                
+            user_endpoints = [
+                f"https://biwenger.as.com/api/v2/user/{uid}?fields=id,name,team,teamValue,balance",
+                f"https://biwenger.as.com/api/v2/user/{uid}/team",
+                f"https://biwenger.as.com/api/v2/user/{uid}?fields=team"
+            ]
+            
+            for u_url in user_endpoints:
+                try:
+                    time.sleep(0.1)
+                    resp_u = requests.get(u_url, headers=headers, timeout=5)
+                    if resp_u.status_code == 200:
+                        u_data = resp_u.json().get("data", {})
+                        if u_data:
+                            u_info["detailed_user_data"] = u_data
+                            if isinstance(u_data, dict) and "balance" in u_data and u_data["balance"] is not None:
+                                u_info["real_balance"] = u_data.get("balance")
+                            
+                            # Si ya encontramos un valor de equipo > 0, no probamos más endpoints
+                            if extract_team_value(u_data) > 0:
+                                break
+                except Exception:
+                    pass
+
         detailed_users.append(u_info)
-        
+
     data["detailed_users"] = detailed_users
 
-    # 3. Descargar el Tablón de Noticias para calcular movimientos
+    # 3. Descargar el Tablón de Noticias/Movimientos
     url_board = "https://biwenger.as.com/api/v2/league/board?limit=500"
     try:
         resp_b = requests.get(url_board, headers=headers, timeout=10)
@@ -126,18 +168,13 @@ if not detailed_users:
 league_name = league_data.get('name', 'Mi Liga')
 st.subheader(f"🏆 Liga: {league_name}")
 
-if error_logs:
-    with st.expander("⚠️ Avisos de red o respuestas de la API"):
-        for err in error_logs:
-            st.write(f"- `{err}`")
-
-# --- AUDITORÍA DE MOVIMIENTOS Y FICHAJES ---
+# --- AUDITORÍA DE MOVIMIENTOS EN EL TABLÓN ---
 user_moves = {}
 for u in detailed_users:
     uid = u.get("id") or (u.get("user", {}).get("id") if isinstance(u.get("user"), dict) else None)
     if uid:
         try:
-            user_moves[int(uid)] = {"spent": 0, "gained": 0}
+            user_moves[int(uid)] = {"spent": 0.0, "gained": 0.0}
         except ValueError:
             pass
 
@@ -148,7 +185,6 @@ if isinstance(board_events, list):
         
         ev_type = event.get("type")
         content = event.get("content")
-        
         items = content if isinstance(content, list) else ([content] if isinstance(content, dict) else [event])
             
         for item in items:
@@ -185,40 +221,6 @@ if isinstance(board_events, list):
                 if buyer_id in user_moves:
                     user_moves[buyer_id]["gained"] += amount
 
-def get_team_value(entry):
-    u_data = entry.get("detailed_user_data", {})
-    
-    # 1. Búsqueda de clave directa en u_data o entry
-    for key in ["teamValue", "team_value", "value"]:
-        val = u_data.get(key) or entry.get(key)
-        if isinstance(val, (int, float)) and val > 0:
-            return float(val)
-
-    # 2. Análisis del objeto o lista 'team'
-    team_obj = u_data.get("team") or entry.get("team")
-    
-    if isinstance(team_obj, dict):
-        for key in ["value", "teamValue", "price"]:
-            val = team_obj.get(key)
-            if isinstance(val, (int, float)) and val > 0:
-                return float(val)
-        if "players" in team_obj and isinstance(team_obj["players"], list):
-            team_obj = team_obj["players"]
-
-    if isinstance(team_obj, list):
-        total_val = 0.0
-        for p in team_obj:
-            if isinstance(p, dict):
-                p_val = p.get("price") or p.get("value") or p.get("marketValue") or p.get("priceMarket") or 0
-                try:
-                    total_val += float(p_val)
-                except (ValueError, TypeError):
-                    pass
-        if total_val > 0:
-            return total_val
-
-    return 0.0
-
 def parse_entry(entry):
     uid = entry.get("id")
     if not uid and isinstance(entry.get("user"), dict):
@@ -240,16 +242,16 @@ def parse_entry(entry):
 
     points = entry.get("points") if entry.get("points") is not None else user_obj.get("points", 0)
 
-    # --- VALOR DE PLANTILLA ---
-    val = get_team_value(entry)
+    # 1. Extraer Valor de Plantilla
+    val = extract_team_value(entry)
 
-    # --- DINERO EN CAJA ---
+    # 2. Extraer Dinero en Caja
     if "real_balance" in entry and entry["real_balance"] is not None:
         bal = float(entry["real_balance"])
     elif "balance" in u_data and u_data["balance"] is not None:
         bal = float(u_data["balance"])
     else:
-        moves = user_moves.get(uid, {"spent": 0, "gained": 0})
+        moves = user_moves.get(uid, {"spent": 0.0, "gained": 0.0})
         net_board_cash = moves["gained"] - moves["spent"]
         bal = (initial_budget - val) + net_board_cash
 
@@ -266,7 +268,9 @@ df_standings = pd.DataFrame(rivals_list)
 
 df_standings["Posición"] = range(1, len(df_standings) + 1)
 df_standings["Valor Total (€)"] = df_standings["Valor Equipo (€)"] + df_standings["Dinero en Caja (€)"]
-df_standings["Puja Máxima (€)"] = df_standings["Dinero en Caja (€)"] + (0.25 * df_standings["Valor Equipo (€)"])
+
+# Puja Máxima: Dinero en caja + (% sobre Valor de Equipo)
+df_standings["Puja Máxima (€)"] = df_standings["Dinero en Caja (€)"] + ((max_bid_pct / 100.0) * df_standings["Valor Equipo (€)"])
 
 tab1, tab2 = st.tabs(["📊 Clasificación y VM de Rivales", "👤 Mi Equipo"])
 
@@ -330,10 +334,10 @@ with tab2:
     col1.metric("💰 Dinero en Caja", f"{bal_team:,.0f} €".replace(",", "."))
     col2.metric("📊 Valor de Plantilla", f"{val_team:,.0f} €".replace(",", "."))
     col3.metric("🏆 Valor Total", f"{val_total:,.0f} €".replace(",", "."))
-    col4.metric("🔥 Puja Máx. Estimada", f"{max_bid:,.0f} €".replace(",", "."))
+    col4.metric(f"🔥 Puja Máx. ({max_bid_pct:.0f}%)", f"{max_bid:,.0f} €".replace(",", "."))
 
-# --- INSPECTOR DE DATOS CRUDOS ---
+# --- INSPECTOR DE DATOS CRUDOS DE LA API ---
 with st.expander("🛠️ Ver datos sin procesar de la API (para diagnóstico)"):
     st.write("Estructura devuelta por Biwenger para el primer mánager consultado:")
     if detailed_users:
-        st.json(detailed_users[0].get("detailed_user_data", {}))
+        st.json(detailed_users[0])
