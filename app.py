@@ -95,7 +95,9 @@ def parse_entry(entry):
         return {"ID User": None, "Usuario": "Desconocido", "Puntos": 0, "Valor Equipo (€)": 0, "Dinero en Caja (€)": 0}
     
     user_obj = entry.get("user") if isinstance(entry.get("user"), dict) else {}
+    team_obj = entry.get("team") if isinstance(entry.get("team"), dict) else {}
     
+    # Obtener nombre de usuario
     name = (
         entry.get("name") or 
         entry.get("username") or 
@@ -109,21 +111,32 @@ def parse_entry(entry):
 
     uid = entry.get("id") or user_obj.get("id") or (entry.get("user") if isinstance(entry.get("user"), int) else None)
 
-    points = entry.get("points")
-    if points is None:
-        points = entry.get("score")
+    # Obtener Puntos
+    points = entry.get("points") if entry.get("points") is not None else entry.get("score")
     if points is None:
         points = user_obj.get("points", 0)
 
-    val = entry.get("teamValue")
-    if val is None:
-        val = entry.get("team_value")
-    if val is None:
-        val = user_obj.get("teamValue", 0)
+    # Obtener Valor de Equipo (búsqueda multinivel)
+    val = (
+        entry.get("teamValue") or 
+        entry.get("team_value") or 
+        team_obj.get("value") or 
+        team_obj.get("teamValue") or 
+        user_obj.get("teamValue") or 
+        user_obj.get("team_value") or 
+        0
+    )
 
-    bal = entry.get("balance")
-    if bal is None:
-        bal = user_obj.get("balance", 0)
+    # Obtener Dinero en Caja (búsqueda multinivel)
+    bal = (
+        entry.get("balance") or 
+        entry.get("cash") or 
+        team_obj.get("balance") or 
+        team_obj.get("cash") or 
+        user_obj.get("balance") or 
+        user_obj.get("cash") or 
+        0
+    )
 
     return {
         "ID User": uid,
@@ -141,7 +154,7 @@ if standings:
     df_standings["Valor Total (€)"] = df_standings["Valor Equipo (€)"] + df_standings["Dinero en Caja (€)"]
     df_standings["Puja Máxima (€)"] = df_standings["Dinero en Caja (€)"] + (0.25 * df_standings["Valor Equipo (€)"])
 
-    tab1, tab2 = st.tabs(["📊 Clasificación y Rivales", "👤 Mi Equipo"])
+    tab1, tab2 = st.tabs(["📊 Clasificación y VM de Rivales", "👤 Mi Equipo"])
 
     with tab1:
         st.write("### 👥 Clasificación y VM de Rivales")
@@ -204,6 +217,11 @@ if standings:
         col2.metric("📊 Valor de Plantilla", f"{val_team:,.0f} €".replace(",", "."))
         col3.metric("🏆 Valor Total", f"{val_total:,.0f} €".replace(",", "."))
         col4.metric("🔥 Puja Máx. Estimada", f"{max_bid:,.0f} €".replace(",", "."))
+
+    # --- INSPECTOR DE DATOS CRUDOS ---
+    with st.expander("🛠️ Ver datos sin procesar de la API (para diagnóstico)"):
+        st.write("Estructura devuelta por Biwenger para el primer usuario:")
+        st.json(standings[0] if standings else {})
 
 else:
     st.warning("No se encontraron datos de clasificación en esta liga.")
