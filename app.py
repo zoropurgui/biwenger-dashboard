@@ -48,20 +48,25 @@ def fetch_league_data(tok, l_id, u_id):
     data = {}
     errors = []
     
-    # 1. Obtener liga global
-    url_league = "https://biwenger.as.com/api/v2/league"
+    # 1. Obtener la liga global
+    url_league = "https://biwenger.as.com/api/v2/league?fields=*,users(*,team),standings(*,user,team)"
     try:
         resp = requests.get(url_league, headers=headers, timeout=10)
         if resp.status_code == 200:
             data = resp.json().get("data", {})
         else:
-            errors.append(f"HTTP {resp.status_code} en /league")
+            # Reintento simple si falla el selector complejo
+            resp_s = requests.get("https://biwenger.as.com/api/v2/league", headers=headers, timeout=10)
+            if resp_s.status_code == 200:
+                data = resp_s.json().get("data", {})
+            else:
+                errors.append(f"HTTP {resp.status_code} en /league")
     except Exception as e:
         errors.append(f"Error en /league: {str(e)}")
 
     users_list = data.get("users", []) or data.get("standings", [])
     
-    # 2. Consultar perfil individual para cada mánager
+    # 2. Consultar perfil de cada mánager solicitando explícitamente el objeto 'team'
     detailed_users = []
     for u in users_list:
         if not isinstance(u, dict):
@@ -69,10 +74,15 @@ def fetch_league_data(tok, l_id, u_id):
         uid = u.get("id") or (u.get("user", {}).get("id") if isinstance(u.get("user"), dict) else None)
         u_info = dict(u)
         
+        # Conservar el saldo si venía en la respuesta global (p. ej. tu usuario)
+        if "balance" in u and u["balance"] is not None:
+            u_info["real_balance"] = u["balance"]
+
         if uid:
-            url_user = f"https://biwenger.as.com/api/v2/user/{uid}"
+            # Solicitamos los campos extendidos con ?fields=*,team
+            url_user = f"https://biwenger.as.com/api/v2/user/{uid}?fields=*,team"
             try:
-                time.sleep(0.2)  # Pausa de seguridad anti-Cloudflare
+                time.sleep(0.15)  # Evita saturar peticiones
                 resp_u = requests.get(url_user, headers=headers, timeout=5)
                 if resp_u.status_code == 200:
                     u_data = resp_u.json().get("data", {})
@@ -88,7 +98,7 @@ def fetch_league_data(tok, l_id, u_id):
         
     data["detailed_users"] = detailed_users
 
-    # 3. Descargar el Tablón de Noticias/Movimientos
+    # 3. Descargar el Tablón de Noticias para calcular movimientos
     url_board = "https://biwenger.as.com/api/v2/league/board?limit=500"
     try:
         resp_b = requests.get(url_board, headers=headers, timeout=10)
@@ -117,16 +127,19 @@ league_name = league_data.get('name', 'Mi Liga')
 st.subheader(f"🏆 Liga: {league_name}")
 
 if error_logs:
-    with st.expander("⚠️ Avisos de red o respuestas parciales de la API"):
+    with st.expander("⚠️ Avisos de red o respuestas de la API"):
         for err in error_logs:
             st.write(f"- `{err}`")
 
-# --- AUDITORÍA DE MOVIMIENTOS Y FICHAJES EN EL TABLÓN ---
+# --- AUDITORÍA DE MOVIMIENTOS Y FICHAJES ---
 user_moves = {}
 for u in detailed_users:
     uid = u.get("id") or (u.get("user", {}).get("id") if isinstance(u.get("user"), dict) else None)
     if uid:
-        user_moves[uid] = {"spent": 0, "gained": 0}
+        try:
+            user_moves[int(uid)] = {"spent": 0, "gained": 0}
+        except ValueError:
+            pass
 
 if isinstance(board_events, list):
     for event in board_events:
@@ -142,15 +155,25 @@ if isinstance(board_events, list):
             if not isinstance(item, dict):
                 continue
                 
-            amount = item.get("amount") or item.get("price") or 0
-            if not isinstance(amount, (int, float)):
-                amount = 0
+            raw_amount = item.get("amount") or item.get("price") or 0
+            try:
+                amount = float(raw_amount)
+            except (ValueError, TypeError):
+                amount = 0.0
 
             seller = item.get("from")
-            seller_id = seller.get("id") if isinstance(seller, dict) else (seller if isinstance(seller, int) else None)
-            
+            seller_id = seller.get("id") if isinstance(seller, dict) else seller
+            try:
+                seller_id = int(seller_id) if seller_id is not None else None
+            except ValueError:
+                seller_id = None
+
             buyer = item.get("to") or item.get("user")
-            buyer_id = buyer.get("id") if isinstance(buyer, dict) else (buyer if isinstance(buyer, int) else None)
+            buyer_id = buyer.get("id") if isinstance(buyer, dict) else buyer
+            try:
+                buyer_id = int(buyer_id) if buyer_id is not None else None
+            except ValueError:
+                buyer_id = None
 
             if ev_type in ["transfer", "market", "clause", "purchase", "sale"]:
                 if seller_id in user_moves:
@@ -162,10 +185,48 @@ if isinstance(board_events, list):
                 if buyer_id in user_moves:
                     user_moves[buyer_id]["gained"] += amount
 
+def get_team_value(entry):
+    u_data = entry.get("detailed_user_data", {})
+    
+    # 1. Búsqueda de clave directa en u_data o entry
+    for key in ["teamValue", "team_value", "value"]:
+        val = u_data.get(key) or entry.get(key)
+        if isinstance(val, (int, float)) and val > 0:
+            return float(val)
+
+    # 2. Análisis del objeto o lista 'team'
+    team_obj = u_data.get("team") or entry.get("team")
+    
+    if isinstance(team_obj, dict):
+        for key in ["value", "teamValue", "price"]:
+            val = team_obj.get(key)
+            if isinstance(val, (int, float)) and val > 0:
+                return float(val)
+        if "players" in team_obj and isinstance(team_obj["players"], list):
+            team_obj = team_obj["players"]
+
+    if isinstance(team_obj, list):
+        total_val = 0.0
+        for p in team_obj:
+            if isinstance(p, dict):
+                p_val = p.get("price") or p.get("value") or p.get("marketValue") or p.get("priceMarket") or 0
+                try:
+                    total_val += float(p_val)
+                except (ValueError, TypeError):
+                    pass
+        if total_val > 0:
+            return total_val
+
+    return 0.0
+
 def parse_entry(entry):
     uid = entry.get("id")
     if not uid and isinstance(entry.get("user"), dict):
         uid = entry["user"].get("id")
+    try:
+        uid = int(uid) if uid is not None else None
+    except ValueError:
+        pass
 
     u_data = entry.get("detailed_user_data", {})
     user_obj = u_data if u_data else (entry.get("user") if isinstance(entry.get("user"), dict) else {})
@@ -179,31 +240,10 @@ def parse_entry(entry):
 
     points = entry.get("points") if entry.get("points") is not None else user_obj.get("points", 0)
 
-    # --- EXTRAER VALOR DE PLANTILLA ---
-    val = (
-        u_data.get("teamValue") or 
-        u_data.get("team_value") or 
-        entry.get("teamValue") or 
-        0
-    )
+    # --- VALOR DE PLANTILLA ---
+    val = get_team_value(entry)
 
-    team_data = u_data.get("team") or entry.get("team")
-
-    if val == 0 and team_data:
-        if isinstance(team_data, list):
-            for p in team_data:
-                if isinstance(p, dict):
-                    p_val = p.get("price") or p.get("value") or p.get("marketValue") or 0
-                    val += float(p_val)
-        elif isinstance(team_data, dict):
-            val = team_data.get("value") or team_data.get("teamValue") or 0
-            if val == 0 and "players" in team_data and isinstance(team_data["players"], list):
-                for p in team_data["players"]:
-                    if isinstance(p, dict):
-                        p_val = p.get("price") or p.get("value") or p.get("marketValue") or 0
-                        val += float(p_val)
-
-    # --- EXTRAER DINERO EN CAJA ---
+    # --- DINERO EN CAJA ---
     if "real_balance" in entry and entry["real_balance"] is not None:
         bal = float(entry["real_balance"])
     elif "balance" in u_data and u_data["balance"] is not None:
@@ -211,7 +251,6 @@ def parse_entry(entry):
     else:
         moves = user_moves.get(uid, {"spent": 0, "gained": 0})
         net_board_cash = moves["gained"] - moves["spent"]
-        # Caja = (40M - Valor Plantilla) + Neto Ventas/Compras Tablón
         bal = (initial_budget - val) + net_board_cash
 
     return {
