@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import requests
+import time
 
 st.set_page_config(page_title="Biwenger Dashboard", page_icon="⚽", layout="wide")
 
@@ -47,8 +48,8 @@ def fetch_league_data(tok, l_id, u_id):
     data = {}
     errors = []
     
-    # 1. Obtener lista de usuarios de la liga
-    url_league = "https://biwenger.as.com/api/v2/league?fields=*,users(*,team),standings(*,user,team)"
+    # 1. Obtener liga global
+    url_league = "https://biwenger.as.com/api/v2/league"
     try:
         resp = requests.get(url_league, headers=headers, timeout=10)
         if resp.status_code == 200:
@@ -60,7 +61,7 @@ def fetch_league_data(tok, l_id, u_id):
 
     users_list = data.get("users", []) or data.get("standings", [])
     
-    # 2. Obtener datos individuales de mánagers (Plantilla y Precios de Jugadores)
+    # 2. Consultar perfil individual para cada mánager
     detailed_users = []
     for u in users_list:
         if not isinstance(u, dict):
@@ -69,16 +70,19 @@ def fetch_league_data(tok, l_id, u_id):
         u_info = dict(u)
         
         if uid:
-            url_user = f"https://biwenger.as.com/api/v2/user/{uid}?fields=*,team(*,player)"
+            url_user = f"https://biwenger.as.com/api/v2/user/{uid}"
             try:
+                time.sleep(0.2)  # Pausa de seguridad anti-Cloudflare
                 resp_u = requests.get(url_user, headers=headers, timeout=5)
                 if resp_u.status_code == 200:
                     u_data = resp_u.json().get("data", {})
                     u_info["detailed_user_data"] = u_data
-                    if "balance" in u_data:
+                    if "balance" in u_data and u_data["balance"] is not None:
                         u_info["real_balance"] = u_data.get("balance")
-            except Exception:
-                pass
+                else:
+                    errors.append(f"HTTP {resp_u.status_code} al consultar mánager ID {uid}")
+            except Exception as e:
+                errors.append(f"Error red mánager ID {uid}: {str(e)}")
                 
         detailed_users.append(u_info)
         
@@ -112,14 +116,17 @@ if not detailed_users:
 league_name = league_data.get('name', 'Mi Liga')
 st.subheader(f"🏆 Liga: {league_name}")
 
-# --- AUDITORÍA DE MOVIMIENTOS Y FICHAJES ---
-user_moves = {
-    (u.get("id") or (u.get("user", {}).get("id") if isinstance(u.get("user"), dict) else None)): {
-        "spent": 0, 
-        "gained": 0
-    } 
-    for u in detailed_users if u.get("id") or u.get("user")
-}
+if error_logs:
+    with st.expander("⚠️ Avisos de red o respuestas parciales de la API"):
+        for err in error_logs:
+            st.write(f"- `{err}`")
+
+# --- AUDITORÍA DE MOVIMIENTOS Y FICHAJES EN EL TABLÓN ---
+user_moves = {}
+for u in detailed_users:
+    uid = u.get("id") or (u.get("user", {}).get("id") if isinstance(u.get("user"), dict) else None)
+    if uid:
+        user_moves[uid] = {"spent": 0, "gained": 0}
 
 if isinstance(board_events, list):
     for event in board_events:
@@ -129,13 +136,7 @@ if isinstance(board_events, list):
         ev_type = event.get("type")
         content = event.get("content")
         
-        items = []
-        if isinstance(content, list):
-            items = content
-        elif isinstance(content, dict):
-            items = [content]
-        else:
-            items = [event]
+        items = content if isinstance(content, list) else ([content] if isinstance(content, dict) else [event])
             
         for item in items:
             if not isinstance(item, dict):
@@ -145,11 +146,9 @@ if isinstance(board_events, list):
             if not isinstance(amount, (int, float)):
                 amount = 0
 
-            # Vendedor
             seller = item.get("from")
             seller_id = seller.get("id") if isinstance(seller, dict) else (seller if isinstance(seller, int) else None)
             
-            # Comprador
             buyer = item.get("to") or item.get("user")
             buyer_id = buyer.get("id") if isinstance(buyer, dict) else (buyer if isinstance(buyer, int) else None)
 
@@ -170,7 +169,6 @@ def parse_entry(entry):
 
     u_data = entry.get("detailed_user_data", {})
     user_obj = u_data if u_data else (entry.get("user") if isinstance(entry.get("user"), dict) else {})
-    team_data = u_data.get("team") or entry.get("team")
 
     name = (
         u_data.get("name") or 
@@ -181,35 +179,47 @@ def parse_entry(entry):
 
     points = entry.get("points") if entry.get("points") is not None else user_obj.get("points", 0)
 
-    # --- CÁLCULO DEL VALOR DE PLANTILLA ---
-    val = 0
-    if isinstance(team_data, list):
-        # Si team es una lista de jugadores, sumamos sus precios/valores
-        for p in team_data:
-            if isinstance(p, dict):
-                p_val = p.get("price") or p.get("value") or p.get("marketValue") or 0
-                val += float(p_val)
-    elif isinstance(team_data, dict):
-        val = team_data.get("value") or team_data.get("teamValue") or 0
-        
-    if val == 0:
-        val = u_data.get("teamValue") or entry.get("teamValue") or 0
+    # --- EXTRAER VALOR DE PLANTILLA ---
+    val = (
+        u_data.get("teamValue") or 
+        u_data.get("team_value") or 
+        entry.get("teamValue") or 
+        0
+    )
 
-    # --- CÁLCULO DEL DINERO EN CAJA ---
+    team_data = u_data.get("team") or entry.get("team")
+
+    if val == 0 and team_data:
+        if isinstance(team_data, list):
+            for p in team_data:
+                if isinstance(p, dict):
+                    p_val = p.get("price") or p.get("value") or p.get("marketValue") or 0
+                    val += float(p_val)
+        elif isinstance(team_data, dict):
+            val = team_data.get("value") or team_data.get("teamValue") or 0
+            if val == 0 and "players" in team_data and isinstance(team_data["players"], list):
+                for p in team_data["players"]:
+                    if isinstance(p, dict):
+                        p_val = p.get("price") or p.get("value") or p.get("marketValue") or 0
+                        val += float(p_val)
+
+    # --- EXTRAER DINERO EN CAJA ---
     if "real_balance" in entry and entry["real_balance"] is not None:
         bal = float(entry["real_balance"])
+    elif "balance" in u_data and u_data["balance"] is not None:
+        bal = float(u_data["balance"])
     else:
         moves = user_moves.get(uid, {"spent": 0, "gained": 0})
         net_board_cash = moves["gained"] - moves["spent"]
-        # Caja = (Presupuesto Inicial 40M - Valor Plantilla Actual) + Neto Ventas/Compras Tablón
+        # Caja = (40M - Valor Plantilla) + Neto Ventas/Compras Tablón
         bal = (initial_budget - val) + net_board_cash
 
     return {
         "ID User": uid,
         "Usuario": str(name),
         "Puntos": int(points or 0),
-        "Valor Equipo (€)": float(val or 0),
-        "Dinero en Caja (€)": float(bal or 0)
+        "Valor Equipo (€)": float(val),
+        "Dinero en Caja (€)": float(bal)
     }
 
 rivals_list = [parse_entry(e) for e in detailed_users]
@@ -285,5 +295,6 @@ with tab2:
 
 # --- INSPECTOR DE DATOS CRUDOS ---
 with st.expander("🛠️ Ver datos sin procesar de la API (para diagnóstico)"):
-    st.write("Movimientos acumulados por mánager extraídos del tablón:")
-    st.json(user_moves)
+    st.write("Estructura devuelta por Biwenger para el primer mánager consultado:")
+    if detailed_users:
+        st.json(detailed_users[0].get("detailed_user_data", {}))
