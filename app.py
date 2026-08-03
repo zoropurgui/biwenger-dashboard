@@ -17,7 +17,7 @@ initial_budget = st.sidebar.number_input(
     "Presupuesto Total Inicial (€)", 
     value=40000000, 
     step=1000000, 
-    help="Reparto inicial: 40M - Valor de Plantilla Inicial"
+    help="Reparto inicial del 31 de julio: 40M (Plantilla + Caja)"
 )
 
 if not token or not league_id:
@@ -60,7 +60,7 @@ def fetch_league_data(tok, l_id, u_id):
 
     users_list = data.get("users", []) or data.get("standings", [])
     
-    # 2. Obtener datos individuales de mánagers (Valor de Plantilla)
+    # 2. Obtener datos individuales de mánagers (Plantilla y Precios de Jugadores)
     detailed_users = []
     for u in users_list:
         if not isinstance(u, dict):
@@ -69,12 +69,12 @@ def fetch_league_data(tok, l_id, u_id):
         u_info = dict(u)
         
         if uid:
-            url_user = f"https://biwenger.as.com/api/v2/user/{uid}?fields=*,team"
+            url_user = f"https://biwenger.as.com/api/v2/user/{uid}?fields=*,team(*,player)"
             try:
                 resp_u = requests.get(url_user, headers=headers, timeout=5)
                 if resp_u.status_code == 200:
                     u_data = resp_u.json().get("data", {})
-                    u_info["detailed_team"] = u_data.get("team", {})
+                    u_info["detailed_user_data"] = u_data
                     if "balance" in u_data:
                         u_info["real_balance"] = u_data.get("balance")
             except Exception:
@@ -85,7 +85,7 @@ def fetch_league_data(tok, l_id, u_id):
     data["detailed_users"] = detailed_users
 
     # 3. Descargar el Tablón de Noticias/Movimientos
-    url_board = "https://biwenger.as.com/api/v2/league/board?limit=300"
+    url_board = "https://biwenger.as.com/api/v2/league/board?limit=500"
     try:
         resp_b = requests.get(url_board, headers=headers, timeout=10)
         if resp_b.status_code == 200:
@@ -112,9 +112,14 @@ if not detailed_users:
 league_name = league_data.get('name', 'Mi Liga')
 st.subheader(f"🏆 Liga: {league_name}")
 
-# --- AUDITORÍA DE MOVIMIENTOS DEL TABLÓN ---
-# Calculamos las ventas, compras y abonos de cada mánager a partir del tablón
-user_moves = {u.get("id"): {"spent": 0, "gained": 0} for u in detailed_users if u.get("id")}
+# --- AUDITORÍA DE MOVIMIENTOS Y FICHAJES ---
+user_moves = {
+    (u.get("id") or (u.get("user", {}).get("id") if isinstance(u.get("user"), dict) else None)): {
+        "spent": 0, 
+        "gained": 0
+    } 
+    for u in detailed_users if u.get("id") or u.get("user")
+}
 
 if isinstance(board_events, list):
     for event in board_events:
@@ -122,71 +127,82 @@ if isinstance(board_events, list):
             continue
         
         ev_type = event.get("type")
-        content = event.get("content", {})
+        content = event.get("content")
         
-        # 1. Compras/Ventas de jugadores
-        if ev_type in ["transfer", "market", "clause"]:
-            amount = event.get("amount") or content.get("amount") or event.get("price") or 0
+        items = []
+        if isinstance(content, list):
+            items = content
+        elif isinstance(content, dict):
+            items = [content]
+        else:
+            items = [event]
             
-            # Quién recibe el dinero (Vendedor)
-            seller_id = event.get("from") or content.get("from")
-            if isinstance(seller_id, dict):
-                seller_id = seller_id.get("id")
-            if seller_id in user_moves:
-                user_moves[seller_id]["gained"] += amount
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+                
+            amount = item.get("amount") or item.get("price") or 0
+            if not isinstance(amount, (int, float)):
+                amount = 0
 
-            # Quién paga el dinero (Comprador)
-            buyer_id = event.get("to") or content.get("to")
-            if isinstance(buyer_id, dict):
-                buyer_id = buyer_id.get("id")
-            if buyer_id in user_moves:
-                user_moves[buyer_id]["spent"] += amount
+            # Vendedor
+            seller = item.get("from")
+            seller_id = seller.get("id") if isinstance(seller, dict) else (seller if isinstance(seller, int) else None)
+            
+            # Comprador
+            buyer = item.get("to") or item.get("user")
+            buyer_id = buyer.get("id") if isinstance(buyer, dict) else (buyer if isinstance(buyer, int) else None)
 
-        # 2. Premios y Abonos del Administrador
-        elif ev_type in ["bonus", "admin_bonus"]:
-            amount = event.get("amount") or content.get("amount") or 0
-            target_user = event.get("user") or content.get("user")
-            if isinstance(target_user, dict):
-                target_user = target_user.get("id")
-            if target_user in user_moves:
-                user_moves[target_user]["gained"] += amount
+            if ev_type in ["transfer", "market", "clause", "purchase", "sale"]:
+                if seller_id in user_moves:
+                    user_moves[seller_id]["gained"] += amount
+                if buyer_id in user_moves:
+                    user_moves[buyer_id]["spent"] += amount
+                        
+            elif ev_type in ["bonus", "admin_bonus", "adminBonus", "reward", "prize"]:
+                if buyer_id in user_moves:
+                    user_moves[buyer_id]["gained"] += amount
 
 def parse_entry(entry):
     uid = entry.get("id")
     if not uid and isinstance(entry.get("user"), dict):
         uid = entry["user"].get("id")
 
-    user_obj = entry.get("user") if isinstance(entry.get("user"), dict) else {}
-    team_obj = entry.get("detailed_team") or entry.get("team") or {}
+    u_data = entry.get("detailed_user_data", {})
+    user_obj = u_data if u_data else (entry.get("user") if isinstance(entry.get("user"), dict) else {})
+    team_data = u_data.get("team") or entry.get("team")
 
     name = (
+        u_data.get("name") or 
         entry.get("name") or 
-        entry.get("username") or 
         user_obj.get("name") or 
-        user_obj.get("username") or 
         f"Mánager {uid or ''}"
     )
 
     points = entry.get("points") if entry.get("points") is not None else user_obj.get("points", 0)
 
-    # Valor de Plantilla Actual
-    val = (
-        team_obj.get("value") or 
-        team_obj.get("teamValue") or 
-        entry.get("teamValue") or 
-        0
-    )
+    # --- CÁLCULO DEL VALOR DE PLANTILLA ---
+    val = 0
+    if isinstance(team_data, list):
+        # Si team es una lista de jugadores, sumamos sus precios/valores
+        for p in team_data:
+            if isinstance(p, dict):
+                p_val = p.get("price") or p.get("value") or p.get("marketValue") or 0
+                val += float(p_val)
+    elif isinstance(team_data, dict):
+        val = team_data.get("value") or team_data.get("teamValue") or 0
+        
+    if val == 0:
+        val = u_data.get("teamValue") or entry.get("teamValue") or 0
 
-    # Cálculo de Dinero en Caja:
-    # Si tenemos el saldo real (nuestro propio usuario), lo usamos directo.
-    # Si es un rival, calculamos: (Presupuesto Total - Valor Equipo Actual) + Net Movimientos del Tablón
-    if "real_balance" in entry:
-        bal = entry["real_balance"]
+    # --- CÁLCULO DEL DINERO EN CAJA ---
+    if "real_balance" in entry and entry["real_balance"] is not None:
+        bal = float(entry["real_balance"])
     else:
         moves = user_moves.get(uid, {"spent": 0, "gained": 0})
-        net_board = moves["gained"] - moves["spent"]
-        # Estimación: Caja Inicial (40M - Valor Plantilla) + Movimientos Tablón
-        bal = (initial_budget - val) + net_board
+        net_board_cash = moves["gained"] - moves["spent"]
+        # Caja = (Presupuesto Inicial 40M - Valor Plantilla Actual) + Neto Ventas/Compras Tablón
+        bal = (initial_budget - val) + net_board_cash
 
     return {
         "ID User": uid,
@@ -206,7 +222,7 @@ df_standings["Puja Máxima (€)"] = df_standings["Dinero en Caja (€)"] + (0.2
 tab1, tab2 = st.tabs(["📊 Clasificación y VM de Rivales", "👤 Mi Equipo"])
 
 with tab1:
-    st.write("### 👥 Clasificación y Estado Financiero Estimado")
+    st.write("### 👥 Clasificación y Estado Financiero Calculado")
 
     cols_order = [
         "Posición",
@@ -267,7 +283,7 @@ with tab2:
     col3.metric("🏆 Valor Total", f"{val_total:,.0f} €".replace(",", "."))
     col4.metric("🔥 Puja Máx. Estimada", f"{max_bid:,.0f} €".replace(",", "."))
 
-# --- INSPECTOR DE DATOS CRUDOS DEL TABLÓN ---
-with st.expander("🛠️ Ver eventos sin procesar del Tablón (para diagnóstico)"):
-    st.write("Últimos movimientos registrados en la liga:")
-    st.json(board_events[:10] if board_events else [])
+# --- INSPECTOR DE DATOS CRUDOS ---
+with st.expander("🛠️ Ver datos sin procesar de la API (para diagnóstico)"):
+    st.write("Movimientos acumulados por mánager extraídos del tablón:")
+    st.json(user_moves)
