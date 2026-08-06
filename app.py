@@ -1,11 +1,3 @@
-El error HTTP 400 (Bad Request) indica que los servidores de Biwenger están rechazando la petición HTTP, habitualmente porque el Bearer Token ha caducado (caducan al cerrar sesión o tras unas horas) o porque el ID de la liga (582855) aún no está asociado a ese token en particular.
-
-Este código para app.py incluye un sistema de diagnóstico que muestra el motivo exacto que responde Biwenger y activa un modo de prueba/fallback manual cuando la API falla. Así podrás probar el panel hoy mismo antes del inicio de la liga mañana.
-
-📄 Código actualizado para app.py
-Reemplaza todo el contenido de app.py en GitHub por el siguiente bloque:
-
-Python
 import streamlit as st
 import pandas as pd
 import requests
@@ -97,12 +89,11 @@ if not api_success:
     with st.expander("🔍 Ver respuesta exacta del servidor de Biwenger"):
         st.write(api_response)
         
-    st.warning("👉 **Causas habituales:** El Bearer Token ha caducado o el League ID `582855` no coincide con la cuenta del Token. Obtén un nuevo token desde la consola Web de Biwenger (F12 -> Network).")
+    st.warning("👉 **Causas habituales:** El Bearer Token ha caducado o el League ID no coincide con la cuenta del Token.")
     
     st.write("---")
-    st.subheader("🧪 Modo de Prueba / Ajuste Manual (Para testear hoy)")
+    st.subheader("🧪 Modo de Prueba / Ajuste Manual (Para testear)")
     
-    # Generador de plantilla simulada para pruebas
     demo_users = [
         {"ID": 1, "Usuario": "Chavowen", "Valor Equipo (€)": 15000000.0},
         {"ID": 2, "Usuario": "Chusco83", "Valor Equipo (€)": 18500000.0},
