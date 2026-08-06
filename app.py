@@ -1,23 +1,24 @@
+Python
 import streamlit as st
 import pandas as pd
 import requests
 
 st.set_page_config(page_title="Biwenger Financial Monitor", page_icon="⚽", layout="wide")
 
-st.title("⚽ Monitor Financiero Biwenger")
+st.title("⚽ Monitor Financiero Biwenger - Liga Real")
 
-# --- SIDEBAR: Credenciales y Configuración ---
+# --- SIDEBAR: Credenciales y Ajustes ---
 st.sidebar.header("🔑 Credenciales de Biwenger")
 token = st.sidebar.text_input("Bearer Token", type="password", help="Pega el token sin 'Bearer ' delante")
-league_id = st.sidebar.text_input("League ID", help="ID de la liga")
+league_id = st.sidebar.text_input("League ID", help="ID de la nueva liga")
 user_id = st.sidebar.text_input("User ID (Opcional)")
 
-st.sidebar.header("⚙️ Configuración Financiera")
+st.sidebar.header("⚙️ Reglas Financieras")
 initial_budget = st.sidebar.number_input(
     "Presupuesto Total Inicial (€)", 
     value=40000000, 
     step=1000000,
-    help="Presupuesto por mánager (Plantilla + Caja)"
+    help="Presupuesto asignado el Día 1: 40M (Plantilla + Caja)"
 )
 
 max_bid_pct = st.sidebar.slider(
@@ -26,14 +27,13 @@ max_bid_pct = st.sidebar.slider(
     max_value=100.0, 
     value=25.0, 
     step=1.0,
-    help="Regla de Biwenger: Caja + (25% del Valor de Plantilla)"
+    help="Regla oficial de Biwenger: Caja + (25% del Valor de Plantilla)"
 )
 
 if not token or not league_id:
-    st.info("👈 Introduce tu **Bearer Token** y **League ID** en la barra lateral.")
+    st.info("👈 Introduce tu **Bearer Token** y el **League ID** de la nueva liga en la barra lateral.")
     st.stop()
 
-# Limpieza de credenciales
 clean_token = token.strip()
 if clean_token.lower().startswith("bearer "):
     clean_token = clean_token[7:].strip()
@@ -52,90 +52,136 @@ headers = {
 if clean_user_id:
     headers["X-User"] = clean_user_id
 
-@st.cache_data(ttl=15)
-def fetch_api_data():
-    url = "https://biwenger.as.com/api/v2/league"
+@st.cache_data(ttl=30)
+def fetch_league_data():
+    data = {}
+    
+    # 1. Obtener lista de mánagers
     try:
-        r = requests.get(url, headers=headers, timeout=8)
-        return r.status_code, r.json() if r.headers.get('content-type', '').startswith('application/json') else r.text
-    except Exception as e:
-        return 0, str(e)
+        r = requests.get("https://biwenger.as.com/api/v2/league", headers=headers, timeout=8)
+        if r.status_code == 200:
+            data["league"] = r.json().get("data", {})
+    except Exception:
+        pass
 
-status_code, api_response = fetch_api_data()
+    # 2. Descargar el historial completo del tablón
+    try:
+        rb = requests.get("https://biwenger.as.com/api/v2/league/board?limit=1000", headers=headers, timeout=8)
+        if rb.status_code == 200:
+            data["board"] = rb.json().get("data", [])
+    except Exception:
+        pass
 
-parsed_users = []
-league_name = "Mi Liga"
-api_success = False
+    return data
 
-if status_code == 200 and isinstance(api_response, dict):
-    api_data = api_response.get("data", {})
-    league_name = api_data.get("name", "Mi Liga")
-    users = api_data.get("users", []) or api_data.get("standings", [])
-    
-    for u in users:
-        if isinstance(u, dict):
-            uid = u.get("id") or (u.get("user", {}).get("id") if isinstance(u.get("user"), dict) else None)
-            uname = u.get("name") or (u.get("user", {}).get("name") if isinstance(u.get("user"), dict) else f"Mánager {uid}")
-            tv = float(u.get("teamValue") or u.get("value") or 0.0)
-            parsed_users.append({"ID": uid, "Usuario": str(uname), "Valor Equipo (€)": tv})
-            
-    if parsed_users:
-        api_success = True
+data = fetch_league_data()
+league_info = data.get("league", {})
+users_list = league_info.get("users", []) or league_info.get("standings", [])
+board_events = data.get("board", [])
 
-# --- TRATAMIENTO DE ERRORES Y MODO DEMO / MANUAL ---
-if not api_success:
-    st.error(f"⚠️ Error de conexión con Biwenger (Código HTTP: {status_code})")
-    
-    with st.expander("🔍 Ver respuesta exacta del servidor de Biwenger"):
-        st.write(api_response)
+if not users_list:
+    st.error("❌ No se pudieron obtener los datos de la nueva liga.")
+    st.warning("👉 Verifica que el **Bearer Token** esté activo y que el **League ID** corresponda a la nueva liga.")
+    st.stop()
+
+st.subheader(f"🏆 Liga: {league_info.get('name', 'Novedades de la Liga')}")
+
+# --- AUDITORÍA DE CONTABILIDAD DESDE EL DÍA 1 ---
+user_stats = {}
+for u in users_list:
+    if isinstance(u, dict):
+        uid = u.get("id") or (u.get("user", {}).get("id") if isinstance(u.get("user"), dict) else None)
+        uname = u.get("name") or (u.get("user", {}).get("name") if isinstance(u.get("user"), dict) else f"Mánager {uid}")
+        tv = float(u.get("teamValue") or u.get("value") or 0.0)
+        if uid:
+            user_stats[int(uid)] = {
+                "name": str(uname),
+                "spent": 0.0,
+                "gained": 0.0,
+                "squad_val": tv,
+                "real_balance": u.get("balance")
+            }
+
+if isinstance(board_events, list):
+    for event in board_events:
+        if not isinstance(event, dict):
+            continue
         
-    st.warning("👉 **Causas habituales:** El Bearer Token ha caducado o el League ID no coincide con la cuenta del Token.")
+        ev_type = str(event.get("type", "")).lower()
+        content = event.get("content")
+        items = content if isinstance(content, list) else ([content] if isinstance(content, dict) else [event])
+            
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            
+            raw_amount = item.get("amount") or item.get("price") or item.get("value") or event.get("amount") or 0
+            try:
+                amount = float(raw_amount)
+            except (ValueError, TypeError):
+                amount = 0.0
+
+            seller = item.get("from") or event.get("from")
+            seller_id = seller.get("id") if isinstance(seller, dict) else seller
+            try:
+                seller_id = int(seller_id) if seller_id is not None else None
+            except (ValueError, TypeError):
+                seller_id = None
+
+            buyer = item.get("to") or item.get("user") or event.get("to") or event.get("user")
+            buyer_id = buyer.get("id") if isinstance(buyer, dict) else buyer
+            try:
+                buyer_id = int(buyer_id) if buyer_id is not None else None
+            except (ValueError, TypeError):
+                buyer_id = None
+
+            # Fichajes, compras, ventas y repartos iniciales
+            if any(t in ev_type for t in ["transfer", "market", "clause", "purchase", "sale", "assignment"]):
+                if seller_id in user_stats:
+                    user_stats[seller_id]["gained"] += amount
+                if buyer_id in user_stats:
+                    user_stats[buyer_id]["spent"] += amount
+
+            # Primas y premios del Administrador
+            elif any(t in ev_type for t in ["bonus", "reward", "prize", "admin"]):
+                if buyer_id in user_stats:
+                    user_stats[buyer_id]["gained"] += amount
+
+# --- TABLA Y CÁLCULOS ---
+records = []
+for uid, info in user_stats.items():
+    squad_val = info["squad_val"]
     
-    st.write("---")
-    st.subheader("🧪 Modo de Prueba / Ajuste Manual (Para testear)")
-    
-    demo_users = [
-        {"ID": 1, "Usuario": "Chavowen", "Valor Equipo (€)": 15000000.0},
-        {"ID": 2, "Usuario": "Chusco83", "Valor Equipo (€)": 18500000.0},
-        {"ID": 3, "Usuario": "Ínter del Ciprés", "Valor Equipo (€)": 12000000.0},
-        {"ID": 4, "Usuario": "Mallorca Fantasy", "Valor Equipo (€)": 20000000.0},
-        {"ID": 5, "Usuario": "Mogambo", "Valor Equipo (€)": 14000000.0},
-        {"ID": 6, "Usuario": "Nairobi F.C.", "Valor Equipo (€)": 16000000.0},
-        {"ID": 7, "Usuario": "Onuba FC", "Valor Equipo (€)": 11000000.0},
-        {"ID": 8, "Usuario": "Rayo76", "Valor Equipo (€)": 17500000.0},
-        {"ID": 9, "Usuario": "Wasabi", "Valor Equipo (€)": 13000000.0},
-        {"ID": 10, "Usuario": "zoropurgui", "Valor Equipo (€)": 19810500.0}
-    ]
-    df_base = pd.DataFrame(demo_users)
-else:
-    st.subheader(f"🏆 Liga: {league_name}")
-    df_base = pd.DataFrame(parsed_users)
+    if info["real_balance"] is not None:
+        cash = float(info["real_balance"])
+    else:
+        cash = (initial_budget - info["spent"]) + info["gained"]
 
-# --- TABLA INTERACTIVA EDITABLE ---
-st.info("✏️ **Instrucciones:** Modifica cualquier importe en **'Valor Equipo (€)'** para recalcular **Caja** y **Puja Máxima** al instante.")
+    total_val = squad_val + cash
+    max_bid = cash + ((max_bid_pct / 100.0) * squad_val)
 
-df_edited = st.data_editor(
-    df_base,
-    column_config={
-        "ID": None,
-        "Usuario": st.column_config.TextColumn("Usuario", disabled=True),
-        "Valor Equipo (€)": st.column_config.NumberColumn(
-            "Valor Equipo (€)",
-            min_value=0,
-            step=250000,
-            format="%d €"
-        )
-    },
-    hide_index=True,
-    use_container_width=True
-)
+    records.append({
+        "ID": uid,
+        "Usuario": info["name"],
+        "Valor Equipo (€)": squad_val,
+        "Dinero en Caja (€)": cash,
+        "Valor Total (€)": total_val,
+        "Puja Máxima (€)": max_bid
+    })
 
-# --- CÁLCULOS DINÁMICOS EN TIEMPO REAL ---
-df_edited["Dinero en Caja (€)"] = initial_budget - df_edited["Valor Equipo (€)"]
-df_edited["Valor Total (€)"] = df_edited["Dinero en Caja (€)"] + df_edited["Valor Equipo (€)"]
-df_edited["Puja Máxima (€)"] = df_edited["Dinero en Caja (€)"] + ((max_bid_pct / 100.0) * df_edited["Valor Equipo (€)"])
+df_standings = pd.DataFrame(records)
 
-df_final = df_edited[["Usuario", "Valor Equipo (€)", "Dinero en Caja (€)", "Valor Total (€)", "Puja Máxima (€)"]]
+st.write("### 👥 Auditoría Automática de Finanzas")
+
+cols_order = [
+    "Usuario",
+    "Valor Equipo (€)",
+    "Dinero en Caja (€)",
+    "Valor Total (€)",
+    "Puja Máxima (€)"
+]
+
+df_final = df_standings[cols_order].copy()
 
 styler = df_final.style.format({
     "Valor Equipo (€)": lambda x: f"{x:,.0f} €".replace(",", "."),
@@ -144,5 +190,4 @@ styler = df_final.style.format({
     "Puja Máxima (€)": lambda x: f"{x:,.0f} €".replace(",", ".")
 })
 
-st.write("#### 📊 Estado Financiero y Límite de Pujas")
 st.dataframe(styler, use_container_width=True, hide_index=True)
