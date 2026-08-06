@@ -1,3 +1,8 @@
+Aquí tienes el código completo de app.py actualizado. Se ha añadido la extracción del icono/avatar de cada usuario de la API de Biwenger y la configuración st.column_config.ImageColumn de Streamlit para renderizar las imágenes de perfil directamente en la tabla.
+
+Copia y reemplaza todo el contenido de app.py en GitHub:
+
+Python
 import streamlit as st
 import pandas as pd
 import requests
@@ -85,16 +90,29 @@ if not users_list:
 
 st.subheader(f"🏆 Liga: {league_info.get('name', 'Novedades de la Liga')}")
 
-# --- AUDITORÍA DE CONTABILIDAD DESDE EL DÍA 1 ---
+# --- AUDITORÍA DE CONTABILIDAD Y EXTRACCIÓN DE ICONOS ---
 user_stats = {}
 for u in users_list:
     if isinstance(u, dict):
         uid = u.get("id") or (u.get("user", {}).get("id") if isinstance(u.get("user"), dict) else None)
         uname = u.get("name") or (u.get("user", {}).get("name") if isinstance(u.get("user"), dict) else f"Mánager {uid}")
         tv = float(u.get("teamValue") or u.get("value") or 0.0)
+        
+        # Obtener la URL del icono o avatar de usuario
+        icon_raw = u.get("icon") or u.get("avatar") or (u.get("user", {}).get("icon") if isinstance(u.get("user"), dict) else None)
+        if icon_raw:
+            icon_str = str(icon_raw)
+            if icon_str.startswith("http"):
+                icon_url = icon_str
+            else:
+                icon_url = f"https://biwenger.as.com/assets/images/{icon_str}"
+        else:
+            icon_url = "https://biwenger.as.com/assets/images/user.png"
+
         if uid:
             user_stats[int(uid)] = {
                 "name": str(uname),
+                "icon": icon_url,
                 "spent": 0.0,
                 "gained": 0.0,
                 "squad_val": tv,
@@ -161,8 +179,9 @@ for uid, info in user_stats.items():
 
     records.append({
         "ID": uid,
+        "Icono": info["icon"],
         "Usuario": info["name"],
-        "Valor Equipo (€)": squad_val,
+        "Valor Equipo (€)": cash_fmt := squad_val,
         "Dinero en Caja (€)": cash,
         "Valor Total (€)": total_val,
         "Puja Máxima (€)": max_bid
@@ -170,9 +189,12 @@ for uid, info in user_stats.items():
 
 df_standings = pd.DataFrame(records)
 
-st.write("### 👥 Auditoría Automática de Finanzas")
+# Formatear importes monetarios
+for col in ["Valor Equipo (€)", "Dinero en Caja (€)", "Valor Total (€)", "Puja Máxima (€)"]:
+    df_standings[col] = df_standings[col].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
 
 cols_order = [
+    "Icono",
     "Usuario",
     "Valor Equipo (€)",
     "Dinero en Caja (€)",
@@ -182,11 +204,18 @@ cols_order = [
 
 df_final = df_standings[cols_order].copy()
 
-styler = df_final.style.format({
-    "Valor Equipo (€)": lambda x: f"{x:,.0f} €".replace(",", "."),
-    "Dinero en Caja (€)": lambda x: f"{x:,.0f} €".replace(",", "."),
-    "Valor Total (€)": lambda x: f"{x:,.0f} €".replace(",", "."),
-    "Puja Máxima (€)": lambda x: f"{x:,.0f} €".replace(",", ".")
-})
+st.write("### 👥 Auditoría Automática de Finanzas")
 
-st.dataframe(styler, use_container_width=True, hide_index=True)
+st.dataframe(
+    df_final,
+    column_config={
+        "Icono": st.column_config.ImageColumn("Icono", help="Icono de perfil del mánager"),
+        "Usuario": st.column_config.TextColumn("Usuario"),
+        "Valor Equipo (€)": st.column_config.TextColumn("Valor Equipo (€)"),
+        "Dinero en Caja (€)": st.column_config.TextColumn("Dinero en Caja (€)"),
+        "Valor Total (€)": st.column_config.TextColumn("Valor Total (€)"),
+        "Puja Máxima (€)": st.column_config.TextColumn("Puja Máxima (€)")
+    },
+    use_container_width=True,
+    hide_index=True
+)
