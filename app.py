@@ -1,8 +1,3 @@
-Aquí tienes el código completo de app.py actualizado. Se ha añadido la extracción del icono/avatar de cada usuario de la API de Biwenger y la configuración st.column_config.ImageColumn de Streamlit para renderizar las imágenes de perfil directamente en la tabla.
-
-Copia y reemplaza todo el contenido de app.py en GitHub:
-
-Python
 import streamlit as st
 import pandas as pd
 import requests
