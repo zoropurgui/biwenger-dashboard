@@ -176,7 +176,7 @@ for uid, info in user_stats.items():
         "ID": uid,
         "Icono": info["icon"],
         "Usuario": info["name"],
-        "Valor Equipo (€)": cash_fmt := squad_val,
+        "Valor Equipo (€)": squad_val,
         "Dinero en Caja (€)": cash,
         "Valor Total (€)": total_val,
         "Puja Máxima (€)": max_bid
