@@ -59,40 +59,34 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
     st.rerun()
 
-league_data = league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
-raw_standings = league_data.get("standings", [])
-raw_users = league_data.get("users", [])
+# --- EXTRACCIÓN ROBUSTA EN CASCADA ---
+standings = []
+if isinstance(league_resp, list):
+    standings = league_resp
+elif isinstance(league_resp, dict):
+    data_field = league_resp.get("data")
+    if isinstance(data_field, list):
+        standings = data_field
+    elif isinstance(data_field, dict):
+        standings = data_field.get("standings", data_field.get("users", []))
+    else:
+        standings = league_resp.get("standings", league_resp.get("users", []))
 
 user_adjustments = {}
 user_names = {}
 vm_data = {}
 
-# 1. Intentar extracción desde 'standings'
-if isinstance(raw_standings, list) and len(raw_standings) > 0:
-    for item in raw_standings:
-        if isinstance(item, dict):
-            uid = item.get("id")
-            uname = item.get("name", "Desconocido")
-            team_val = float(item.get("teamValue", 0) or 0)
-            if uid:
-                user_adjustments[uid] = 0.0
-                user_names[uid] = uname
-                vm_data[uid] = team_val
+for item in standings:
+    if isinstance(item, dict):
+        uid = item.get("id")
+        uname = item.get("name", "Desconocido")
+        team_val = float(item.get("teamValue", 0) or item.get("value", 0) or 0)
+        if uid:
+            user_adjustments[uid] = 0.0
+            user_names[uid] = uname
+            vm_data[uid] = team_val
 
-# 2. Si falló, intentar desde 'users'
-if not user_names and isinstance(raw_users, list) and len(raw_users) > 0:
-    for u in raw_users:
-        if isinstance(u, dict):
-            uid = u.get("id")
-            uname = u.get("name", "Desconocido")
-            acc = u.get("account", {})
-            team_val = float(acc.get("teamValue", 0) or acc.get("value", 0) or 0)
-            if uid:
-                user_adjustments[uid] = 0.0
-                user_names[uid] = uname
-                vm_data[uid] = team_val
-
-# 3. Fallback absoluto con datos de referencia si la API no devuelve listas pobladas
+# Fallback por seguridad si la estructura viniera vacía
 if not user_names:
     for idx, (name_key, def_val) in enumerate(DAY_ONE_VALS.items()):
         uid = 1000 + idx
