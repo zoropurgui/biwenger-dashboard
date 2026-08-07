@@ -59,73 +59,67 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
     st.rerun()
 
-# --- EXTRACCIÓN OFICIAL Y DIRECTA DE DATOS DE LA LIGA ---
-league_data = league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
-
-# 1. Mapeo de Nombres de Usuarios
-names_map = {}
-users_list = league_data.get("users", [])
-if isinstance(users_list, list):
-    for u in users_list:
-        if isinstance(u, dict):
-            uid = u.get("id")
-            uname = u.get("name") or u.get("username")
-            if uid is not None and uname:
-                names_map[str(uid)] = uname
-elif isinstance(users_list, dict):
-    for uid, u in users_list.items():
-        if isinstance(u, dict):
-            uname = u.get("name") or u.get("username")
-            if uname:
-                names_map[str(uid)] = uname
-
-# 2. Mapeo de Valores de Equipo Actuales (Standings)
-vm_map = {}
-standings_list = league_data.get("standings", [])
-if isinstance(standings_list, list):
-    for s in standings_list:
-        if isinstance(s, dict):
-            uid = s.get("id") or s.get("user")
-            if isinstance(uid, dict):
-                uid = uid.get("id")
-            val = s.get("value") or s.get("teamValue") or 0.0
-            if uid is not None:
-                try:
-                    vm_map[str(uid)] = float(val)
-                except:
-                    pass
-
-# Respaldo en usuarios si no se obtuvieron en standings
-if not vm_map and isinstance(users_list, list):
-    for u in users_list:
-        if isinstance(u, dict):
-            uid = u.get("id")
-            val = u.get("value") or u.get("teamValue") or 0.0
-            if uid is not None:
-                try:
-                    vm_map[str(uid)] = float(val)
-                except:
-                    pass
-
-user_adjustments = {}
+# --- EXTRACCIÓN GLOBAL Y RECURSIVA DEFINITIVA DEL VALOR DE EQUIPO ---
 user_names = {}
 vm_data = {}
 
-all_uids = set(names_map.keys()).union(set(vm_map.keys()))
-
-for uid in all_uids:
-    uname = names_map.get(uid, f"Usuario {uid}")
-    team_val = vm_map.get(uid, 0.0)
-    
-    # Fallback individual al día 1 si viniera a 0
-    if team_val == 0.0:
-        team_val = DAY_ONE_VALS.get(uname.lower(), 21500000.0)
+def extract_from_node(node):
+    if isinstance(node, dict):
+        uid = node.get("id") or node.get("user") or node.get("userId")
+        if isinstance(uid, dict):
+            uid = uid.get("id")
         
-    user_adjustments[uid] = 0.0
-    user_names[uid] = uname
-    vm_data[uid] = team_val
+        uname = node.get("name") or node.get("username") or node.get("slug")
+        
+        val = None
+        for k in ["value", "teamValue", "marketValue", "team_value"]:
+            if k in node and node[k] is not None:
+                try:
+                    v = float(node[k])
+                    if v > 100000:
+                        val = v
+                        break
+                except:
+                    pass
+        
+        if val is None:
+            for sub in ["team", "account", "profile"]:
+                sub_obj = node.get(sub)
+                if isinstance(sub_obj, dict):
+                    for k in ["value", "teamValue", "marketValue", "price"]:
+                        if k in sub_obj and sub_obj[k] is not None:
+                            try:
+                                v = float(sub_obj[k])
+                                if v > 100000:
+                                    val = v
+                                    break
+                            except:
+                                pass
+                    if val is not None:
+                        break
 
-# Fallback global por seguridad si la API estuviera vacía
+        if uid is not None:
+            uid_str = str(uid)
+            if uname and (uid_str not in user_names or len(str(user_names[uid_str])) < len(str(uname))):
+                user_names[uid_str] = uname
+            if val is not None and val > 100000:
+                vm_data[uid_str] = val
+
+        for v in node.values():
+            extract_from_node(v)
+    elif isinstance(node, list):
+        for item in node:
+            extract_from_node(item)
+
+extract_from_node(league_resp)
+
+user_adjustments = {}
+for uid in user_names.keys():
+    user_adjustments[uid] = 0.0
+    if uid not in vm_data or vm_data[uid] == 0.0:
+        uname = user_names[uid]
+        vm_data[uid] = DAY_ONE_VALS.get(str(uname).lower(), 21500000.0)
+
 if not user_names:
     for idx, (name_key, def_val) in enumerate(DAY_ONE_VALS.items()):
         uid = str(1000 + idx)
