@@ -4,7 +4,7 @@ import requests
 
 st.set_page_config(page_title="Biwenger Financial Monitor Pro", page_icon="⚽", layout="wide")
 
-st.title("⚽ Monitor Financiero Biwenger (Conexión Standings)")
+st.title("⚽ Monitor Financiero Biwenger (Definitivo y Completo)")
 
 # --- SIDEBAR: Configuración ---
 st.sidebar.header("🔑 Conexión")
@@ -55,7 +55,6 @@ headers = {"Authorization": f"Bearer {clean_token}", "X-League": str(l_id), "X-U
 
 @st.cache_data(ttl=5)
 def get_all_data(league_id):
-    # Añadimos el endpoint /standings que es el que contiene el valor del equipo
     url_standings = f"https://biwenger.as.com/api/v2/league/{league_id}/standings"
     url_transfers = f"https://biwenger.as.com/api/v2/league/{league_id}/transfers?limit=50"
     url_board = f"https://biwenger.as.com/api/v2/league/{league_id}/board?limit=50"
@@ -67,14 +66,21 @@ def get_all_data(league_id):
 
 standings_resp, transfers_resp, board_resp = get_all_data(l_id)
 
-# Los datos están en "data" (es una lista de usuarios con sus stats)
-users_data = standings_resp.get("data", [])
+# Extracción robusta de usuarios / standings
+raw_data = standings_resp.get("data", [])
+if isinstance(raw_data, dict):
+    users_data = raw_data.get("standings", []) or raw_data.get("users", [])
+elif isinstance(raw_data, list):
+    users_data = raw_data
+else:
+    users_data = []
+
 transfers = transfers_resp.get("data", [])
 board = board_resp.get("data", [])
 
-# Creamos el mapa de ajustes basado en el ID del usuario
-user_adjustments = {u.get("id"): 0.0 for u in users_data}
-user_names = {u.get("id"): u.get("name") for u in users_data}
+# Mapeos de seguridad
+user_adjustments = {u.get("id"): 0.0 for u in users_data if isinstance(u, dict)}
+user_names = {u.get("id"): u.get("name") for u in users_data if isinstance(u, dict)}
 detected_events_log = []
 
 def add_money(user_id, amount, desc):
@@ -87,7 +93,7 @@ def sub_money(user_id, amount, desc):
         user_adjustments[user_id] -= amount
         detected_events_log.append({"Usuario": user_names.get(user_id, str(user_id)), "Importe (€)": -amount, "Descripción": desc})
 
-# Procesar movimientos
+# Procesar transferencias formales
 for t in transfers:
     if not isinstance(t, dict): continue
     amt = float(t.get("amount", 0) or t.get("price", 0) or 0)
@@ -97,6 +103,7 @@ for t in transfers:
     if s: add_money(int(s), amt, "Venta")
     if b: sub_money(int(b), amt, "Compra")
 
+# Procesar Tablón
 for item in board:
     if not isinstance(item, dict): continue
     content = item.get("content")
@@ -104,9 +111,12 @@ for item in board:
     for el in elements:
         if not isinstance(el, dict): continue
         amt = float(el.get("amount", 0) or el.get("price", 0) or el.get("value", 0) or 0)
-        s_id = el.get("from").get("id") if isinstance(el.get("from"), dict) else el.get("from")
-        b_id = el.get("to").get("id") if isinstance(el.get("to"), dict) else el.get("to")
-        if s_id and not b_id and amt > 0: add_money(int(s_id), amt, "Venta Inmediata")
+        from_obj = el.get("from")
+        to_obj = el.get("to")
+        s_id = from_obj.get("id") if isinstance(from_obj, dict) else from_obj
+        b_id = to_obj.get("id") if isinstance(to_obj, dict) else to_obj
+        if s_id and not b_id and amt > 0:
+            add_money(int(s_id), amt, "Venta Inmediata a Máquina")
         elif s_id and b_id and amt > 0:
             add_money(int(s_id), amt, "Venta entre mánagers")
             sub_money(int(b_id), amt, "Compra entre mánagers")
@@ -114,10 +124,12 @@ for item in board:
 # --- TABLA FINAL ---
 records = []
 for u in users_data:
+    if not isinstance(u, dict): continue
     u_id = u.get("id")
-    # Biwenger suele devolver el valor en 'teamValue' dentro de standings
-    v_actual = float(u.get("teamValue", 0))
     name = str(u.get("name", "Desconocido")).lower()
+    
+    # Búsqueda segura del valor del equipo en varias propiedades posibles
+    v_actual = float(u.get("teamValue") or u.get("value") or 0)
     
     v_inicial = DAY_ONE_VALS.get(name, 21500000.0)
     ajuste = user_adjustments.get(u_id, 0.0)
@@ -134,10 +146,26 @@ for u in users_data:
         "Puja máxima": puja_max
     })
 
-df = pd.DataFrame(records).sort_values("Dinero en caja", ascending=False)
+if records:
+    df = pd.DataFrame(records).sort_values("Dinero en caja", ascending=False)
+    
+    for col in ["Valor del equipo", "Dinero en caja", "Valor equipo + caja", "Puja máxima"]:
+        df[col] = df[col].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
 
-for col in ["Valor del equipo", "Dinero en caja", "Valor equipo + caja", "Puja máxima"]:
-    df[col] = df[col].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
+    st.subheader("📊 Monitor Financiero en Directo")
+    st.dataframe(df, use_container_width=True, hide_index=True)
+else:
+    st.warning("No se han encontrado registros de usuarios en esta respuesta.")
 
-st.subheader("📊 Monitor Financiero en Directo")
-st.dataframe(df, use_container_width=True, hide_index=True)
+# --- PANEL DE DIAGNÓSTICO Y TRANSACCIONES RESTAURADO ---
+with st.expander("🔍 Ver transacciones y ventas a la máquina | 🛠️ Diagnóstico"):
+    st.write("Estructura de datos obtenida (Standings de referencia):")
+    st.json(users_data[0] if users_data else {})
+    
+    st.subheader("Historial de movimientos detectados")
+    if detected_events_log:
+        df_log = pd.DataFrame(detected_events_log)
+        df_log["Importe (€)"] = df_log["Importe (€)"].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
+        st.dataframe(df_log, use_container_width=True, hide_index=True)
+    else:
+        st.info("No se han detectado movimientos de dinero todavía en los registros recientes.")
