@@ -130,7 +130,6 @@ if not user_names:
 # Asegurar que ningún usuario de DAY_ONE_VALS se quede sin valor actual
 for uid, name in list(user_names.items()):
     if uid not in vm_data or vm_data[uid] == 0.0:
-        # Buscar por nombre en minúsculas si el ID no coincide
         match_val = None
         for d_name, d_val in DAY_ONE_VALS.items():
             if d_name in str(name).lower():
@@ -191,7 +190,7 @@ for uid, name in user_names.items():
     v_actual = vm_data.get(uid, 21500000.0)
     
     if uid in api_balance_data:
-        saldo_real = api_balance_data[uid] + user_adjustments.get(uid, 0.0)
+        saldo_real = api_balance_data[uid] - user_adjustments.get(uid, 0.0)
     else:
         # Calcular saldo inicial estimado basándose en el valor de día uno
         d_val = None
@@ -201,7 +200,7 @@ for uid, name in user_names.items():
                 break
         v_inicial = d_val if d_val else 21500000.0
         ajuste = user_adjustments.get(uid, 0.0)
-        saldo_real = (INITIAL_TOTAL - v_inicial) + ajuste
+        saldo_real = (INITIAL_TOTAL - v_inicial) - ajuste  # <-- AQUÍ SE HA CAMBIADO EL SIGNO
         
     valor_total_caja = v_actual + saldo_real
     puja_max = saldo_real + ((max_bid_pct / 100.0) * v_actual)
