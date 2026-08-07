@@ -34,23 +34,22 @@ def fetch_all_biwenger_data(t):
     try:
         acc = requests.get("https://biwenger.as.com/api/v2/account", headers=h, timeout=8).json()
         leagues = acc.get("data", {}).get("leagues", [])
-        if not leagues: return None, None, {}, {}, {}, {}, {}
+        if not leagues: return None, None, {}, {}, {}, {}
         
         l = leagues[0]
         l_id, u_id = l.get("id"), l.get("user", {}).get("id")
         h.update({"X-League": str(l_id), "X-User": str(u_id)})
         
         r_league = requests.get(f"https://biwenger.as.com/api/v2/league/{l_id}", headers=h).json()
-        r_standings = requests.get(f"https://biwenger.as.com/api/v2/league/{l_id}/standings", headers=h).json()
         r_squads = requests.get(f"https://biwenger.as.com/api/v2/league/{l_id}/squads", headers=h).json()
         r_transfers = requests.get(f"https://biwenger.as.com/api/v2/league/{l_id}/transfers?limit=50", headers=h).json()
         r_board = requests.get(f"https://biwenger.as.com/api/v2/league/{l_id}/board?limit=50", headers=h).json()
         
-        return l_id, u_id, r_league, r_standings, r_squads, r_transfers, r_board
+        return l_id, u_id, r_league, r_squads, r_transfers, r_board
     except Exception:
-        return None, None, {}, {}, {}, {}, {}
+        return None, None, {}, {}, {}, {}
 
-l_id, u_id, league_resp, standings_resp, squads_resp, transfers_resp, board_resp = fetch_all_biwenger_data(clean_token)
+l_id, u_id, league_resp, squads_resp, transfers_resp, board_resp = fetch_all_biwenger_data(clean_token)
 
 if not l_id:
     st.error("❌ Error de conexión o token inválido.")
@@ -63,13 +62,9 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
     st.rerun()
 
-# Extraer usuarios combinando la liga y los standings
+# Extraer usuarios
 league_data = league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
 users_list = league_data.get("users", [])
-standings_data = standings_resp.get("data", []) if isinstance(standings_resp, dict) else []
-
-if not users_list and isinstance(standings_data, list):
-    users_list = standings_data
 
 if not users_list:
     users_list = [{"id": i, "name": name.title()} for i, name in enumerate(DAY_ONE_VALS.keys())]
@@ -128,38 +123,19 @@ if isinstance(board, list):
                 add_money(int(s_id), amt, "Venta entre mánagers")
                 sub_money(int(b_id), amt, "Compra entre mánagers")
 
-# Extracción ultra robusta del VM buscando en standings, squads o propiedades internas
+# Extracción del Valor de Mercado (VM) desde squads
 vm_data = {}
-
-# 1. Buscar en standings (que es de donde sale la vista web)
-if isinstance(standings_data, list):
-    for item in standings_data:
-        if isinstance(item, dict):
-            u_id = item.get("id")
-            # Buscar teamValue en múltiples rutas posibles dentro del objeto de standings
-            tv = (
-                item.get("teamValue") or 
-                item.get("value") or 
-                (item.get("stat") or {}).get("teamValue") or
-                (item.get("account") or {}).get("teamValue") or
-                0.0
-            )
-            if u_id and tv > 0:
-                vm_data[int(u_id)] = float(tv)
-
-# 2. Si falta alguno, buscar en squads sumando jugadores
 squads_data = squads_resp.get("data", {}) if isinstance(squads_resp, dict) else {}
+
 if isinstance(squads_data, dict):
     for u_id_str, squad in squads_data.items():
         try:
             u_id = int(u_id_str)
-            if u_id not in vm_data or vm_data[u_id] == 0:
-                total_vm = 0
-                players = squad.get("players", []) if isinstance(squad, dict) else []
-                for p in players:
-                    total_vm += float(p.get("price", 0) or p.get("marketValue", 0) or 0)
-                if total_vm > 0:
-                    vm_data[u_id] = total_vm
+            # Intentar leer el valor total directamente del squad o sumando sus jugadores
+            tv = float(squad.get("value", 0) or squad.get("teamValue", 0) or 0)
+            if tv == 0 and isinstance(squad.get("players"), list):
+                tv = sum(float(p.get("price", 0) or p.get("marketValue", 0) or 0) for p in squad["players"])
+            vm_data[u_id] = tv
         except Exception:
             pass
 
@@ -208,6 +184,6 @@ else:
     st.info("ℹ️ No se han detectado movimientos recientes en transferencias o tablón.")
 
 # --- PANEL DE DIAGNÓSTICO TÉCNICO ---
-with st.expander("🛠️ Panel de Diagnóstico Técnico (Ver respuestas brutas de la API)"):
-    st.write("**Standings Response (Datos de la tabla web):**")
-    st.json(standings_resp)
+with st.expander("🛠️ Panel de Diagnóstico Técnico (Ver respuesta de Squads)"):
+    st.write("**Squads Response:**")
+    st.json(squads_resp)
