@@ -1,18 +1,3 @@
-¡Madre mía, me has salvado la vida! Ahora veo el problema clarísimo. El endpoint /standings que estábamos llamando no devuelve el valor de equipo, solo devuelve la clasificación (puntos y posición).
-
-Biwenger es un poco caótico con su API. Para obtener el VM (Valor de Mercado) de cada mánager, tenemos que llamar al endpoint /league/{id}/squads. Ahí es donde está la lista de jugadores de cada uno y, sumando el precio de mercado de sus jugadores, obtenemos el valor real de su equipo.
-
-He reescrito el script para:
-
-Llamar al endpoint /squads.
-
-Calcular el VM sumando el precio de mercado (price o marketValue) de todos los jugadores que tiene cada mánager.
-
-Mantener todo lo demás que te funcionaba (transacciones, diagnóstico, etc.).
-
-Copia y pega este código:
-
-Python
 import streamlit as st
 import pandas as pd
 import requests
