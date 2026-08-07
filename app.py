@@ -4,7 +4,7 @@ import requests
 
 st.set_page_config(page_title="Biwenger Financial Monitor Pro", page_icon="⚽", layout="wide")
 
-st.title("⚽ Monitor Financiero Biwenger (Definitivo)")
+st.title("⚽ Monitor Financiero Biwenger (Definitivo Corregido)")
 
 # --- SIDEBAR: Configuración ---
 st.sidebar.header("🔑 Conexión")
@@ -51,18 +51,22 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
     st.rerun()
 
-# --- PETICIONES A LA API ---
+# --- PETICIONES A LA API CON LA RUTA CORRECTA DE LA LIGA ---
 headers = {"Authorization": f"Bearer {clean_token}", "X-League": str(l_id), "X-User": str(u_id), "X-App-Version": "2.0.0"}
-base = "https://biwenger.as.com/api/v2/league"
 
 @st.cache_data(ttl=5)
-def get_all_data():
-    r_users = requests.get(base, headers=headers).json()
-    r_transfers = requests.get(f"{base}/transfers?limit=50", headers=headers).json()
-    r_board = requests.get(f"{base}/board?limit=50", headers=headers).json()
+def get_all_data(league_id):
+    # ¡AQUÍ ESTABA EL FALLO! Las URLs ahora incluyen el ID de la liga en el path
+    url_league = f"https://biwenger.as.com/api/v2/league/{league_id}"
+    url_transfers = f"https://biwenger.as.com/api/v2/league/{league_id}/transfers?limit=50"
+    url_board = f"https://biwenger.as.com/api/v2/league/{league_id}/board?limit=50"
+    
+    r_users = requests.get(url_league, headers=headers).json()
+    r_transfers = requests.get(url_transfers, headers=headers).json()
+    r_board = requests.get(url_board, headers=headers).json()
     return r_users, r_transfers, r_board
 
-users_resp, transfers_resp, board_resp = get_all_data()
+users_resp, transfers_resp, board_resp = get_all_data(l_id)
 
 users_data = users_resp.get("data", {}).get("users", [])
 transfers = transfers_resp.get("data", [])
@@ -120,11 +124,9 @@ for item in board:
         s_id = from_obj.get("id") if isinstance(from_obj, dict) else from_obj
         b_id = to_obj.get("id") if isinstance(to_obj, dict) else to_obj
         
-        # Si es una venta inmediata a la máquina (tiene 'from' pero NO 'to', o type == 'immediateSale')
         if s_id and not b_id and amt > 0:
             add_money(int(s_id), amt, "Venta Inmediata a Máquina")
         elif s_id and b_id and amt > 0:
-            # Transferencia entre usuarios o mercado normal
             add_money(int(s_id), amt, "Venta entre mánagers")
             sub_money(int(b_id), amt, "Compra entre mánagers")
 
