@@ -51,58 +51,61 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
     st.rerun()
 
-# --- EXTRACCIÓN SOBRE USERS (Base Original Funcional) ---
+# --- EXTRACCIÓN CORRECTA DESDE STANDINGS ---
 league_data = league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
-users_list = league_data.get("users", [])
+standings_list = league_data.get("standings", [])
 
 user_names = {}
 vm_data = {}
 api_balance_data = {}
 extraction_debug_logs = []
 
-if isinstance(users_list, list):
-    for u in users_list:
-        if not isinstance(u, dict): continue
-        uid = str(u.get("id"))
-        uname = u.get("name") or u.get("username")
-        user_names[uid] = uname
+if isinstance(standings_list, list):
+    for item in standings_list:
+        if not isinstance(item, dict): continue
         
-        debug_info = {
-            "ID": uid,
-            "Usuario": uname,
-            "Keys del objeto u": list(u.keys()),
-            "teamValue_encontrado": "NO ENCONTRADO",
-            "origen_valor": "Ninguno (Aplicó Fallback)"
-        }
+        uid = item.get("id")
+        uname = item.get("name") or item.get("username")
         
-        # Búsqueda segura por si viniera algún campo de valor
-        t_val = None
-        for key in ["teamValue", "value", "marketValue", "price"]:
-            if key in u and u[key] is not None:
-                try:
-                    val = float(u[key])
-                    if val > 0:
-                        t_val = val
-                        debug_info["teamValue_encontrado"] = t_val
-                        debug_info["origen_valor"] = f"Encontrado en '{key}'"
-                        break
-                except:
-                    pass
-        
-        if t_val:
-            vm_data[uid] = t_val
-            
-        for b_key in ["balance", "money", "cash"]:
-            if b_key in u:
-                try:
-                    api_balance_data[uid] = float(u[b_key])
-                except:
-                    pass
-                break
-                
-        extraction_debug_logs.append(debug_info)
+        # Por si el nombre o id viene anidado en un objeto 'user'
+        user_obj = item.get("user")
+        if isinstance(user_obj, dict):
+            uid = user_obj.get("id") or uid
+            uname = user_obj.get("name") or user_obj.get("username") or uname
 
-# --- VALORES INICIALES (Fallback Garantizado) ---
+        if uid is not None:
+            uid_str = str(uid)
+            if uname:
+                user_names[uid_str] = uname
+            
+            debug_info = {
+                "ID": uid_str,
+                "Usuario": uname,
+                "Keys de standings": list(item.keys()),
+                "teamValue_encontrado": "NO ENCONTRADO",
+                "origen_valor": "Ninguno"
+            }
+            
+            # Extracción directa de teamValue de standings
+            t_val = None
+            for key in ["teamValue", "value", "marketValue", "price"]:
+                if key in item and item[key] is not None:
+                    try:
+                        val = float(item[key])
+                        if val > 0:
+                            t_val = val
+                            debug_info["teamValue_encontrado"] = t_val
+                            debug_info["origen_valor"] = f"standings['{key}']"
+                            break
+                    except:
+                        pass
+            
+            if t_val is not None:
+                vm_data[uid_str] = t_val
+                
+            extraction_debug_logs.append(debug_info)
+
+# --- VALORES INICIALES (Fallback por seguridad) ---
 DAY_ONE_VALS = {
     "athletik81": 21600000.0, "ring014": 21580000.0, "tubu": 21570000.0, 
     "marroba": 21560000.0, "zhukkov": 21560000.0, "nitwolf": 21550000.0, 
@@ -204,12 +207,12 @@ if detected_events_log:
 else:
     st.info("ℹ️ No se han detectado movimientos recientes.")
 
-# --- DIAGNÓSTICO ORIGINAL ---
-with st.expander("🔍 Diagnóstico Detallado de Extracción de Valores", expanded=False):
-    st.markdown("Este panel muestra qué estructura y claves ha encontrado el script para cada usuario en la respuesta de la API.")
+# --- DIAGNÓSTICO DE STANDINGS ---
+with st.expander("🔍 Diagnóstico Detallado de Extracción en STANDINGS", expanded=False):
+    st.markdown("Este panel muestra qué claves y valores ha extraído el script directamente de la lista **standings**.")
     if extraction_debug_logs:
         df_debug = pd.DataFrame(extraction_debug_logs)
-        df_debug["Keys del objeto u"] = df_debug["Keys del objeto u"].apply(lambda x: ", ".join(x) if isinstance(x, list) else str(x))
+        df_debug["Keys de standings"] = df_debug["Keys de standings"].apply(lambda x: ", ".join(x) if isinstance(x, list) else str(x))
         st.dataframe(df_debug, use_container_width=True, hide_index=True)
     else:
         st.write("No hay registros de depuración disponibles.")
