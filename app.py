@@ -51,107 +51,64 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
     st.rerun()
 
-# --- EXTRACCIÓN UNIFICADA Y ROBUSTA (USERS + STANDINGS) ---
+# --- EXTRACCIÓN DIRECTA DESDE STANDINGS (Fuente Real de Biwenger) ---
 league_data = league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
-raw_users = league_data.get("users", [])
-raw_standings = league_data.get("standings", [])
-
-user_info_map = {}
-
-# 1. Cargar desde users
-if isinstance(raw_users, list):
-    for u in raw_users:
-        if isinstance(u, dict):
-            uid = u.get("id")
-            if uid is not None:
-                user_info_map[str(uid)] = dict(u)
-
-# 2. Combinar/Actualizar con standings (donde viene teamValue)
-if isinstance(raw_standings, list):
-    for s in raw_standings:
-        if isinstance(s, dict):
-            uid = s.get("id")
-            if uid is None and isinstance(s.get("user"), dict):
-                uid = s.get("user").get("id")
-            if uid is not None:
-                uid_str = str(uid)
-                if uid_str not in user_info_map:
-                    user_info_map[uid_str] = dict(s)
-                else:
-                    user_info_map[uid_str].update(s)
+standings_list = league_data.get("standings", [])
 
 user_names = {}
 vm_data = {}
 api_balance_data = {}
 extraction_debug_logs = []
 
-for uid_str, u in user_info_map.items():
-    uname = u.get("name") or u.get("username")
-    if not uname and isinstance(u.get("user"), dict):
-        uname = u.get("user").get("name") or u.get("user").get("username")
-    
-    if uname:
-        user_names[uid_str] = uname
+if isinstance(standings_list, list):
+    for item in standings_list:
+        if not isinstance(item, dict): continue
         
-    debug_info = {
-        "ID": uid_str,
-        "Usuario": uname,
-        "Keys disponibles": list(u.keys()),
-        "teamValue_encontrado": "NO ENCONTRADO",
-        "origen_valor": "Ninguno (Aplicó Fallback)"
-    }
-    
-    t_val = None
-    # Búsqueda directa de valor
-    for key in ["teamValue", "value", "marketValue", "price", "team_value"]:
-        if key in u and u[key] is not None:
-            try:
-                val = float(u[key])
-                if val > 0:
-                    t_val = val
-                    debug_info["teamValue_encontrado"] = t_val
-                    debug_info["origen_valor"] = f"Clave directa: {key}"
-                    break
-            except:
-                pass
-                
-    # Búsqueda anidada por si acaso
-    if t_val is None:
-        for sub_key in ["team", "user", "account"]:
-            sub_obj = u.get(sub_key)
-            if isinstance(sub_obj, dict):
-                for key in ["teamValue", "value", "marketValue", "price"]:
-                    if key in sub_obj and sub_obj[key] is not None:
-                        try:
-                            val = float(sub_obj[key])
-                            if val > 0:
-                                t_val = val
-                                debug_info["teamValue_encontrado"] = t_val
-                                debug_info["origen_valor"] = f"Anidado en '{sub_key}': {key}"
-                                break
-                        except:
-                            pass
-                if t_val is not None:
-                    break
-                    
-    if t_val is not None:
-        vm_data[uid_str] = t_val
+        uid = item.get("id")
+        uname = item.get("name") or item.get("username")
         
-    for b_key in ["balance", "money", "cash"]:
-        if b_key in u and u[b_key] is not None:
-            try:
-                api_balance_data[uid_str] = float(u[b_key])
-            except:
-                pass
-            break
+        # Por si el id/nombre viene dentro de un objeto 'user' interno
+        if uid is None and isinstance(item.get("user"), dict):
+            uid = item.get("user").get("id")
+            uname = item.get("user").get("name") or item.get("user").get("username")
             
-    extraction_debug_logs.append(debug_info)
+        if uid is not None:
+            uid_str = str(uid)
+            if uname:
+                user_names[uid_str] = uname
+            
+            # Extracción limpia y directa de teamValue
+            t_val = None
+            if "teamValue" in item and item["teamValue"] is not None:
+                try:
+                    t_val = float(item["teamValue"])
+                except:
+                    pass
+            
+            if t_val is not None and t_val > 0:
+                vm_data[uid_str] = t_val
+                
+            # Extracción de saldo si viene en standings
+            for b_key in ["balance", "money", "cash"]:
+                if b_key in item and item[b_key] is not None:
+                    try:
+                        api_balance_data[uid_str] = float(item[b_key])
+                    except:
+                        pass
+                    break
+            
+            extraction_debug_logs.append({
+                "ID": uid_str,
+                "Usuario": uname,
+                "teamValue_extraido": t_val if t_val else "NO ENCONTRADO",
+                "Keys disponibles": list(item.keys())
+            })
 
-# --- VALORES INICIALES (Fallback Garantizado) ---
+# --- VALORES INICIALES (Fallback de seguridad por si algún usuario no tuviera valor) ---
 DAY_ONE_VALS = {
     "athletik81": 21600000.0, "ring014": 21580000.0, "tubu": 21570000.0, 
-    "marroba": 21560000.0, "zhukkov": 21560000.0, "nitwolf": 21550000.0, 
-    "yoqsetio xdxd": 21550000.0, "nistalikus": 21550000.0, "moltisanti": 21540000.0, 
+    "marroba": 21410000.0, "zhukkov": 21240000.0, "nitwolf": 21550000.0, 
+    "yoqsetio xdxd": 21870000.0, "nistalikus": 21550000.0, "moltisanti": 21540000.0, 
     "gran gravessen": 21540000.0, "zoropurgui": 21530000.0, "_caesar_": 21510000.0, 
     "nitrorx": 21490000.0
 }
@@ -249,12 +206,12 @@ if detected_events_log:
 else:
     st.info("ℹ️ No se han detectado movimientos recientes.")
 
-# --- DIAGNÓSTICO UNIFICADO ---
-with st.expander("🔍 Diagnóstico Detallado de Extracción Unificada", expanded=False):
-    st.markdown("Este panel muestra qué claves y valores ha extraído el script combinando las fuentes de la API.")
+# --- DIAGNÓSTICO ---
+with st.expander("🔍 Diagnóstico: Extracción en STANDINGS", expanded=False):
+    st.markdown("Comprueba aquí que los valores de `teamValue` coinciden con los de tu aplicación de Biwenger.")
     if extraction_debug_logs:
         df_debug = pd.DataFrame(extraction_debug_logs)
-        df_debug["Keys disponibles"] = df_debug["Keys disponibles"].apply(lambda x: ", ".join(x) if isinstance(x, list) else str(x))
+        df_debug["Keys disponibles"] = df_debug["Keys disponibles"].apply(lambda x: ", ".join(str(k) for k in x) if isinstance(x, list) else str(x))
         st.dataframe(df_debug, use_container_width=True, hide_index=True)
     else:
         st.write("No hay registros de depuración disponibles.")
