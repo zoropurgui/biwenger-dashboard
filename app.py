@@ -4,7 +4,7 @@ import requests
 
 st.set_page_config(page_title="Biwenger Financial Monitor Pro", page_icon="⚽", layout="wide")
 
-st.title("⚽ Monitor Financiero Biwenger (Definitivo Corregido)")
+st.title("⚽ Monitor Financiero Biwenger (Diagnóstico de API)")
 
 # --- SIDEBAR: Configuración ---
 st.sidebar.header("🔑 Conexión")
@@ -51,7 +51,6 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
     st.rerun()
 
-# --- PETICIONES A LA API ---
 headers = {"Authorization": f"Bearer {clean_token}", "X-League": str(l_id), "X-User": str(u_id), "X-App-Version": "2.0.0"}
 
 @st.cache_data(ttl=5)
@@ -66,19 +65,15 @@ def get_all_data(league_id):
     return r_users, r_transfers, r_board
 
 users_resp, transfers_resp, board_resp = get_all_data(l_id)
-
 league_data = users_resp.get("data", {})
-# Usamos 'standings' que es donde Biwenger almacena el valor de equipo y la clasificación real
-users_data = league_data.get("standings", [])
-if not users_data:
-    # Fallback por si acaso usa la clave 'users'
-    users_data = league_data.get("users", [])
 
+# --- PROCESAMIENTO DE MOVIMIENTOS ---
+users_list = league_data.get("users", [])
 transfers = transfers_resp.get("data", [])
 board = board_resp.get("data", [])
 
-user_adjustments = {u.get("id"): 0.0 for u in users_data}
-user_names = {u.get("id"): u.get("name") for u in users_data}
+user_adjustments = {u.get("id"): 0.0 for u in users_list}
+user_names = {u.get("id"): u.get("name") for u in users_list}
 detected_events_log = []
 
 def add_money(user_id, amount, desc):
@@ -91,7 +86,6 @@ def sub_money(user_id, amount, desc):
         user_adjustments[user_id] -= amount
         detected_events_log.append({"Usuario": user_names.get(user_id, str(user_id)), "Importe (€)": -amount, "Descripción": desc})
 
-# 1. Procesar transferencias formales
 for t in transfers:
     if not isinstance(t, dict): continue
     amt = float(t.get("amount", 0) or t.get("price", 0) or 0)
@@ -102,7 +96,6 @@ for t in transfers:
     if seller: add_money(int(seller), amt, "Venta")
     if buyer: sub_money(int(buyer), amt, "Compra")
 
-# 2. Procesar el Tablón (Feed)
 for item in board:
     if not isinstance(item, dict): continue
     content = item.get("content")
@@ -122,12 +115,12 @@ for item in board:
 
 # --- TABLA FINAL ---
 records = []
-for u in users_data:
+for u in users_list:
     u_id = u.get("id")
     name = str(u.get("name", "Desconocido")).lower()
     
-    # Extraemos el valor del equipo directamente de 'standings' (teamValue o value)
-    v_actual = float(u.get("teamValue") or u.get("value") or 0)
+    # Valor temporal a 0 hasta ver dónde viene en el JSON principal
+    v_actual = float(u.get("teamValue", 0) or 0)
     
     v_inicial = DAY_ONE_VALS.get(name, 21500000.0)
     ajuste = user_adjustments.get(u_id, 0.0)
@@ -145,20 +138,16 @@ for u in users_data:
     })
 
 df = pd.DataFrame(records).sort_values("Dinero en caja", ascending=False)
-
 for col in ["Valor del equipo", "Dinero en caja", "Valor equipo + caja", "Puja máxima"]:
     df[col] = df[col].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
 
 st.subheader("📊 Monitor Financiero en Directo")
 st.dataframe(df, use_container_width=True, hide_index=True)
 
-with st.expander("🔍 Ver transacciones y ventas a la máquina | 🛠️ Diagnóstico"):
-    st.write("Estructura de datos obtenida (Standings):")
-    st.json(users_data[0] if users_data else {})
-    
-    if detected_events_log:
-        df_log = pd.DataFrame(detected_events_log)
-        df_log["Importe (€)"] = df_log["Importe (€)"].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
-        st.dataframe(df_log, use_container_width=True, hide_index=True)
-    else:
-        st.info("No se han detectado movimientos todavía.")
+# --- PANEL DE INSPECCIÓN TOTAL ---
+st.subheader("🛠️ Inspección de claves de la API")
+st.write("Estas son todas las secciones principales que devuelve la API de tu liga:")
+st.write(list(league_data.keys()))
+
+with st.expander("Ver contenido completo del objeto de la liga (JSON bruto)"):
+    st.json(league_data)
