@@ -1,9 +1,9 @@
 import pandas as pd
 import requests
 import streamlit as st
-import easyocr  # <--- NUEVO
-import numpy as np # <--- NUEVO
-from PIL import Image # <--- NUEVO
+import easyocr
+import numpy as np
+from PIL import Image
 
 st.set_page_config(
     page_title="Monitor Financiero Biwenger", page_icon="⚽", layout="wide"
@@ -13,7 +13,7 @@ st.title("⚽ Monitor Financiero Biwenger")
 
 # --- SIDEBAR: Configuración ---
 token = st.sidebar.text_input("Bearer Token", type="password")
-uploaded_file = st.sidebar.file_uploader("📸 Sube captura de Biwenger", type=["png", "jpg", "jpeg"]) # <--- NUEVO
+uploaded_file = st.sidebar.file_uploader("📸 Sube captura de Biwenger", type=["png", "jpg", "jpeg"])
 
 if not token:
   st.info("👈 Pega tu **Bearer Token** en la barra lateral para empezar.")
@@ -146,30 +146,59 @@ if raw_list:
       if t_val is not None: current_vm_data[uid] = t_val
       extraction_debug_logs.append({"ID": uid, "Usuario": uname})
 
-# --- PROCESAMIENTO OCR (NUEVO) ---
+# --- PROCESAMIENTO OCR MEJORADO ---
 if uploaded_file is not None:
-    st.write("🔍 Procesando imagen...")
+    st.write("🔍 Procesando imagen por filas...")
     try:
-        reader = easyocr.Reader(['es']) # Carga modelo español
+        reader = easyocr.Reader(['es'])
         img = Image.open(uploaded_file)
         img_np = np.array(img)
         result = reader.readtext(img_np)
         
-        # Lógica simplificada: buscamos números altos que parecen valores de equipo
-        # Esto depende de cómo sea tu captura, puede requerir ajuste fino
-        detected_vals = []
-        for (bbox, text, prob) in result:
-            clean_text = text.replace('.', '').replace(',', '')
-            if clean_text.isdigit() and len(clean_text) > 6:
-                detected_vals.append(float(clean_text))
+        known_users = {str(name).lower().strip(): uid for uid, name in user_names.items()}
         
-        # Asignamos a los usuarios encontrados en orden
-        # NOTA: Esta lógica asume que el OCR detecta los valores en el mismo orden que user_names
-        keys = list(user_names.keys())
-        for i, val in enumerate(detected_vals):
-            if i < len(keys):
-                current_vm_data[keys[i]] = val
-        st.success("✅ Valores actualizados desde la imagen.")
+        lines = []
+        for bbox, text, prob in result:
+            y_center = (bbox[0][1] + bbox[2][1]) / 2
+            lines.append((y_center, text))
+            
+        lines.sort(key=lambda x: x[0])
+        
+        rows = []
+        tolerance = 15
+        for y, text in lines:
+            placed = False
+            for row in rows:
+                if abs(row['y'] - y) < tolerance:
+                    row['texts'].append(text)
+                    placed = True
+                    break
+            if not placed:
+                rows.append({'y': y, 'texts': [text]})
+                
+        for row in rows:
+            row_text_full = " ".join(row['texts']).lower()
+            
+            matched_uid = None
+            for u_name_lower, uid in known_users.items():
+                parts = u_name_lower.split()
+                if any(p in row_text_full for p in parts if len(p) > 2):
+                    matched_uid = uid
+                    break
+                    
+            matched_val = None
+            for t in row['texts']:
+                clean_t = t.replace('.', '').replace(',', '').replace('€', '').replace('M', '').strip()
+                if clean_t.isdigit():
+                    val = float(clean_t)
+                    if 100000 <= val <= 1000000000:
+                        matched_val = val
+                        break
+                        
+            if matched_uid and matched_val:
+                current_vm_data[matched_uid] = matched_val
+                
+        st.success("✅ Valores de equipo actualizados correctamente desde la imagen.")
     except Exception as e:
         st.error(f"Error procesando imagen: {e}")
 
@@ -243,11 +272,10 @@ for uid, name in user_names.items():
 
 if records:
   st.subheader("📊 Monitor Financiero en Directo")
-  st.write("✏️ *Puedes editar el 'Valor actual' o subir una captura para actualizarlo.*")
+  st.write("✏️ *Actualiza el 'Valor actual del equipo' de cada mánager o sube captura.*")
   
   df_records = pd.DataFrame(records)
   
-  # Tabla superior limpia solo con Usuario y Valor actual del equipo
   df_editor_input = df_records[["Usuario", "Valor actual del equipo"]].copy()
   
   edited_df = st.data_editor(
@@ -257,7 +285,6 @@ if records:
       disabled=["Usuario"]
   )
   
-  # Fusionamos los valores actualizados con los cálculos internos
   df_final = df_records.copy()
   df_final["Valor actual del equipo"] = edited_df["Valor actual del equipo"].values
   
