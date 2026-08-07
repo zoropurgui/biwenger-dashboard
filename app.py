@@ -4,7 +4,7 @@ import requests
 
 st.set_page_config(page_title="Biwenger Financial Monitor Pro", page_icon="⚽", layout="wide")
 
-st.title("⚽ Monitor Financiero Biwenger (Modo Diagnóstico)")
+st.title("⚽ Monitor Financiero Biwenger (Definitivo)")
 
 # --- SIDEBAR: Configuración ---
 st.sidebar.header("🔑 Conexión")
@@ -35,12 +35,7 @@ def fetch_account_leagues(t):
     res = requests.get(url, headers=h, timeout=8)
     return res.json().get("data", {}).get("leagues", [])
 
-try:
-    leagues = fetch_account_leagues(clean_token)
-except Exception as e:
-    st.sidebar.error(f"Error de conexión: {e}")
-    st.stop()
-
+leagues = fetch_account_leagues(clean_token)
 if not leagues:
     st.sidebar.error("❌ Token inválido o sin ligas.")
     st.stop()
@@ -56,7 +51,7 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
     st.rerun()
 
-# --- PETICIONES A LA API (SIN BLOQUEAR ERRORES PARA VER QUÉ FALLA) ---
+# --- PETICIONES A LA API ---
 headers = {"Authorization": f"Bearer {clean_token}", "X-League": str(l_id), "X-User": str(u_id), "X-App-Version": "2.0.0"}
 base = "https://biwenger.as.com/api/v2/league"
 
@@ -86,42 +81,52 @@ def add_money(user_id, amount, desc):
             "Descripción": desc
         })
 
-# Analizar transferencias formales
+def sub_money(user_id, amount, desc):
+    if user_id in user_adjustments and amount > 0:
+        user_adjustments[user_id] -= amount
+        detected_events_log.append({
+            "Usuario": user_names.get(user_id, str(user_id)),
+            "Importe (€)": -amount,
+            "Descripción": desc
+        })
+
+# 1. Procesar transferencias formales
 for t in transfers:
     if not isinstance(t, dict): continue
-    # Estructura típica de transferencias
     amt = float(t.get("amount", 0) or t.get("price", 0) or 0)
-    # Comprobar si hay vendedor
+    
     seller = t.get("from")
     if isinstance(seller, dict): seller = seller.get("id")
-    if seller:
-        add_money(seller, amt, "Venta en transfers")
+    
+    buyer = t.get("to")
+    if isinstance(buyer, dict): buyer = buyer.get("id")
+    
+    if seller: add_money(int(seller), amt, "Venta")
+    if buyer: sub_money(int(buyer), amt, "Compra")
 
-# Analizar el tablón (feed) de forma exhaustiva
+# 2. Procesar el Tablón (Feed) incluyendo 'immediateSale'
 for item in board:
     if not isinstance(item, dict): continue
-    # Extraer datos del evento del tablón
-    u_ev = item.get("user") # ID del usuario que genera el evento
     content = item.get("content")
-    ev_type = str(item.get("type", ""))
-    
-    # Si el contenido es una lista o un diccionario
     elements = content if isinstance(content, list) else [content]
     
     for el in elements:
-        if isinstance(el, dict):
-            amt = float(el.get("amount", 0) or el.get("price", 0) or el.get("value", 0) or 0)
-            # Buscar si hay un vendedor explícito
-            from_obj = el.get("from")
-            s_id = from_obj.get("id") if isinstance(from_obj, dict) else from_obj
-            
-            if not s_id and u_id: # Si no especifica 'from' pero pertenece al usuario del evento
-                s_id = u_ev
-                
-            if s_id and amt > 0:
-                add_money(int(s_id), amt, f"Movimiento en tablón (Tipo: {ev_type})")
-        elif isinstance(content, (int, float)) and content > 0 and u_ev:
-            add_money(int(u_ev), float(content), f"Evento numérico tablón ({ev_type})")
+        if not isinstance(el, dict): continue
+        amt = float(el.get("amount", 0) or el.get("price", 0) or el.get("value", 0) or 0)
+        
+        from_obj = el.get("from")
+        to_obj = el.get("to")
+        
+        s_id = from_obj.get("id") if isinstance(from_obj, dict) else from_obj
+        b_id = to_obj.get("id") if isinstance(to_obj, dict) else to_obj
+        
+        # Si es una venta inmediata a la máquina (tiene 'from' pero NO 'to', o type == 'immediateSale')
+        if s_id and not b_id and amt > 0:
+            add_money(int(s_id), amt, "Venta Inmediata a Máquina")
+        elif s_id and b_id and amt > 0:
+            # Transferencia entre usuarios o mercado normal
+            add_money(int(s_id), amt, "Venta entre mánagers")
+            sub_money(int(b_id), amt, "Compra entre mánagers")
 
 # --- TABLA FINAL ---
 records = []
@@ -150,7 +155,10 @@ for col in ["💸 Saldo Real en Caja", "🔄 Ajuste Detectado", "🔥 Puja Máxi
 st.subheader("📊 Monitor Financiero en Directo")
 st.dataframe(df, use_container_width=True, hide_index=True)
 
-# --- PANEL DE DIAGNOSTICO ---
-with st.expander("🛠️ Depuración: Ver qué devuelve exactamente la API del Tablón"):
-    st.write("Si el script sigue sin ver la venta, expande esto para examinar los datos crudos que nos entrega Biwenger:")
-    st.json(board[:5]) # Muestra los primeros 5 elementos del tablón tal cual llegan
+with st.expander("🔍 Ver transacciones y ventas a la máquina detectadas"):
+    if detected_events_log:
+        df_log = pd.DataFrame(detected_events_log)
+        df_log["Importe (€)"] = df_log["Importe (€)"].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
+        st.dataframe(df_log, use_container_width=True, hide_index=True)
+    else:
+        st.info("No se han detectado movimientos todavía.")
