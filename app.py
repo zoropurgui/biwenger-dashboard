@@ -37,7 +37,6 @@ if not token or not league_id or not user_id:
     st.info("👈 Introduce tu **Bearer Token**, **League ID** y **User ID** en la barra lateral para conectar.")
     st.stop()
 
-# Limpieza de valores
 clean_token = token.strip()
 if clean_token.lower().startswith("bearer "):
     clean_token = clean_token[7:].strip()
@@ -55,7 +54,6 @@ headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 }
 
-# --- RESPALDO CON DATOS REALES DEL DÍA 1 ---
 DAY_ONE_FALLBACK = {
     "athletik81": 21600000.0,
     "ring014": 21580000.0,
@@ -76,7 +74,6 @@ DAY_ONE_FALLBACK = {
 def fetch_api_data(t_val, l_val, u_val):
     results = {"status": 0, "league": None, "standings": [], "board": [], "transfers": [], "raw_err": ""}
     
-    # 1. Liga
     try:
         r = requests.get("https://biwenger.as.com/api/v2/league", headers=headers, timeout=8)
         results["status"] = r.status_code
@@ -89,7 +86,6 @@ def fetch_api_data(t_val, l_val, u_val):
         results["raw_err"] = str(e)
         return results
 
-    # 2. Clasificación
     try:
         rs = requests.get("https://biwenger.as.com/api/v2/league/standings?offset=0&limit=100", headers=headers, timeout=8)
         if rs.status_code == 200:
@@ -97,7 +93,6 @@ def fetch_api_data(t_val, l_val, u_val):
     except Exception:
         pass
 
-    # 3. Tablón
     try:
         rb = requests.get("https://biwenger.as.com/api/v2/league/board?limit=1000", headers=headers, timeout=8)
         if rb.status_code == 200:
@@ -105,7 +100,6 @@ def fetch_api_data(t_val, l_val, u_val):
     except Exception:
         pass
 
-    # 4. Endpoint directo de Transferencias
     try:
         rt = requests.get("https://biwenger.as.com/api/v2/league/transfers?limit=100", headers=headers, timeout=8)
         if rt.status_code == 200:
@@ -156,6 +150,7 @@ else:
         id_to_name[uid] = str(uname)
         
         tv = 0.0
+        # Buscar el valor en todas las claves posibles
         for key in ["teamValue", "value", "team_value", "squadValue"]:
             if u.get(key) is not None:
                 try:
@@ -172,9 +167,13 @@ else:
                 except (ValueError, TypeError):
                     pass
 
+        # INDICADOR DE PROBLEMA: Si el valor es 0, usamos respaldo y marcamos con ⚠️
         if tv == 0.0:
             clean_name = str(uname).strip().lower()
             tv = DAY_ONE_FALLBACK.get(clean_name, 0.0)
+            uname_display = f"{uname} ⚠️"
+        else:
+            uname_display = str(uname)
 
         icon_raw = u.get("icon") or u.get("avatar") or u_dict.get("icon") or u_dict.get("avatar")
         if icon_raw:
@@ -187,7 +186,7 @@ else:
 
         if uid not in user_stats:
             user_stats[uid] = {
-                "name": str(uname),
+                "name": uname_display,
                 "icon": icon_url,
                 "spent": 0.0,
                 "gained": 0.0,
@@ -195,8 +194,10 @@ else:
                 "real_balance": real_bal
             }
         else:
-            if tv > 0:
+            if tv > 0 and user_stats[uid]["squad_val"] == DAY_ONE_FALLBACK.get(str(uname).strip().lower(), 0.0):
+                # Si encontramos un valor real, actualizamos y quitamos el warning
                 user_stats[uid]["squad_val"] = tv
+                user_stats[uid]["name"] = str(uname)
             if real_bal is not None:
                 user_stats[uid]["real_balance"] = real_bal
             if icon_url != "https://biwenger.as.com/assets/images/user.png":
@@ -205,133 +206,64 @@ else:
     detected_transfers = []
     processed_keys = set()
 
-    # --- 1. PROCESAR ENDPOINT DIRECTO DE TRANSACCIONES ---
+    # Procesar transacciones
     if isinstance(direct_transfers, list):
         for tr in direct_transfers:
             if not isinstance(tr, dict):
                 continue
-            
             raw_amount = tr.get("amount") or tr.get("price") or tr.get("value") or 0
             try:
                 amount = float(raw_amount)
-            except (ValueError, TypeError):
+            except:
                 amount = 0.0
 
             seller = tr.get("from")
-            seller_id = seller.get("id") if isinstance(seller, dict) else seller
-            try:
-                seller_id = int(seller_id) if seller_id is not None else None
-            except (ValueError, TypeError):
-                seller_id = None
-
+            seller_id = int(seller.get("id")) if isinstance(seller, dict) and seller.get("id") else None
             buyer = tr.get("to") or tr.get("user")
-            buyer_id = buyer.get("id") if isinstance(buyer, dict) else buyer
-            try:
-                buyer_id = int(buyer_id) if buyer_id is not None else None
-            except (ValueError, TypeError):
-                buyer_id = None
+            buyer_id = int(buyer.get("id")) if isinstance(buyer, dict) and buyer.get("id") else None
 
             key = f"{seller_id}_{buyer_id}_{amount}"
-            if key in processed_keys:
-                continue
-            processed_keys.add(key)
-
-            if amount > 0:
+            if key not in processed_keys and amount > 0:
+                processed_keys.add(key)
                 seller_name = id_to_name.get(seller_id, "Mercado") if seller_id else "Mercado"
                 buyer_name = id_to_name.get(buyer_id, "Mercado") if buyer_id else "Mercado"
+                if seller_id in user_stats: user_stats[seller_id]["gained"] += amount
+                if buyer_id in user_stats: user_stats[buyer_id]["spent"] += amount
+                detected_transfers.append({"Origen": "Transfers API", "Vendedor": seller_name, "Comprador": buyer_name, "Importe (€)": amount})
 
-                if seller_id in user_stats:
-                    user_stats[seller_id]["gained"] += amount
-                if buyer_id in user_stats:
-                    user_stats[buyer_id]["spent"] += amount
-
-                detected_transfers.append({
-                    "Origen": "Transfers API",
-                    "Vendedor": seller_name,
-                    "Comprador": buyer_name,
-                    "Importe (€)": amount
-                })
-
-    # --- 2. PROCESAR TABLÓN DE EVENTOS ---
     if isinstance(board_events, list):
         for event in board_events:
-            if not isinstance(event, dict):
-                continue
-            
+            if not isinstance(event, dict): continue
             ev_type = str(event.get("type", "")).lower()
             content = event.get("content")
             items = content if isinstance(content, list) else ([content] if isinstance(content, dict) else [event])
-                
+            
             for item in items:
-                if not isinstance(item, dict):
-                    continue
-                
+                if not isinstance(item, dict): continue
                 raw_amount = item.get("amount") or item.get("price") or item.get("value") or item.get("bid") or event.get("amount") or 0
-                try:
-                    amount = float(raw_amount)
-                except (ValueError, TypeError):
-                    amount = 0.0
+                try: amount = float(raw_amount)
+                except: amount = 0.0
 
                 seller = item.get("from") or event.get("from")
-                seller_id = seller.get("id") if isinstance(seller, dict) else seller
-                try:
-                    seller_id = int(seller_id) if seller_id is not None else None
-                except (ValueError, TypeError):
-                    seller_id = None
-
+                seller_id = int(seller.get("id")) if isinstance(seller, dict) and seller.get("id") else None
                 buyer = item.get("to") or item.get("user") or event.get("to") or event.get("user")
-                buyer_id = buyer.get("id") if isinstance(buyer, dict) else buyer
-                try:
-                    buyer_id = int(buyer_id) if buyer_id is not None else None
-                except (ValueError, TypeError):
-                    buyer_id = None
+                buyer_id = int(buyer.get("id")) if isinstance(buyer, dict) and buyer.get("id") else None
 
                 key = f"{seller_id}_{buyer_id}_{amount}"
-                if key in processed_keys:
-                    continue
-
-                is_transfer = any(t in ev_type for t in ["transfer", "market", "clause", "purchase", "sale", "assignment", "deal", "trade"])
-                is_bonus = any(t in ev_type for t in ["bonus", "reward", "prize", "admin"])
-
-                if is_transfer and amount > 0:
+                is_transfer = any(t in ev_type for t in ["transfer", "market", "clause", "purchase", "sale", "assignment", "deal"])
+                
+                if key not in processed_keys and is_transfer and amount > 0:
                     processed_keys.add(key)
                     seller_name = id_to_name.get(seller_id, "Mercado") if seller_id else "Mercado"
                     buyer_name = id_to_name.get(buyer_id, "Mercado") if buyer_id else "Mercado"
-                    
-                    if seller_id in user_stats:
-                        user_stats[seller_id]["gained"] += amount
-                    if buyer_id in user_stats:
-                        user_stats[buyer_id]["spent"] += amount
-
-                    detected_transfers.append({
-                        "Origen": "Tablón",
-                        "Vendedor": seller_name,
-                        "Comprador": buyer_name,
-                        "Importe (€)": amount
-                    })
-
-                elif is_bonus and amount > 0:
-                    processed_keys.add(key)
-                    buyer_name = id_to_name.get(buyer_id, "Mánager")
-                    if buyer_id in user_stats:
-                        user_stats[buyer_id]["gained"] += amount
-
-                    detected_transfers.append({
-                        "Origen": "Tablón (Abono)",
-                        "Vendedor": "Administrador",
-                        "Comprador": buyer_name,
-                        "Importe (€)": amount
-                    })
+                    if seller_id in user_stats: user_stats[seller_id]["gained"] += amount
+                    if buyer_id in user_stats: user_stats[buyer_id]["spent"] += amount
+                    detected_transfers.append({"Origen": "Tablón", "Vendedor": seller_name, "Comprador": buyer_name, "Importe (€)": amount})
 
     records = []
     for uid, info in user_stats.items():
         squad_val = info["squad_val"]
-        
-        if info["real_balance"] is not None:
-            cash = float(info["real_balance"])
-        else:
-            cash = (initial_budget - squad_val - info["spent"]) + info["gained"]
-
+        cash = float(info["real_balance"]) if info["real_balance"] is not None else (initial_budget - squad_val - info["spent"]) + info["gained"]
         total_val = squad_val + cash
         max_bid = cash + ((max_bid_pct / 100.0) * squad_val)
 
@@ -345,7 +277,6 @@ else:
         })
     
     df_base = pd.DataFrame(records)
-    
     if not df_base.empty and "Valor Equipo (€)" in df_base.columns:
         df_base = df_base.sort_values(by="Valor Equipo (€)", ascending=False)
 
@@ -353,22 +284,21 @@ else:
         df_base[col] = df_base[col].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
 
     st.write("### 👥 Auditoría Automática de Finanzas")
+    st.caption("Si ves un ⚠️ junto a un nombre, Biwenger no nos está enviando los datos reales y se están usando los fijos.")
     
     calculated_height = (len(df_base) + 1) * 38 + 10
 
     st.dataframe(
         df_base,
         column_config={
-            "Icono": st.column_config.ImageColumn("Icono", help="Avatar del mánager"),
+            "Icono": st.column_config.ImageColumn("Icono"),
             "Usuario": st.column_config.TextColumn("Usuario"),
             "Valor Equipo (€)": st.column_config.TextColumn("Valor Equipo (€)"),
             "Dinero en Caja (€)": st.column_config.TextColumn("Dinero en Caja (€)"),
             "Valor Total (€)": st.column_config.TextColumn("Valor Total (€)"),
             "Puja Máxima (€)": st.column_config.TextColumn("Puja Máxima (€)")
         },
-        use_container_width=True,
-        hide_index=True,
-        height=calculated_height
+        use_container_width=True, hide_index=True, height=calculated_height
     )
 
     with st.expander("📜 Ver Fichajes y Ventas Detectados por el Monitor"):
@@ -377,4 +307,12 @@ else:
             df_trans["Importe (€)"] = df_trans["Importe (€)"].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
             st.dataframe(df_trans, use_container_width=True, hide_index=True)
         else:
-            st.info("Aún no se han detectado movimientos de mercado registrados en Biwenger.")
+            st.info("Aún no se han detectado movimientos.")
+
+    # --- MODO DEPURACIÓN VISUAL ---
+    with st.expander("🛠️ MODO DEPURACIÓN: Ver datos brutos de la API (Solo para encontrar el fallo)"):
+        st.write("Aquí podemos ver el archivo exacto que Biwenger nos entrega por detrás. Si el valor del equipo o la venta no están aquí, la API los está ocultando.")
+        st.write("**1. Datos de los equipos (Clasificación):**")
+        st.json(standings_data)
+        st.write("**2. Últimos movimientos del tablón:**")
+        st.json(board_events[:5] if isinstance(board_events, list) else [])
