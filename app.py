@@ -59,42 +59,100 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
     st.rerun()
 
-# --- EXTRACCIÓN DIRECTA Y PRECISA DESDE 'users' (API BIWENGER V2) ---
+# --- EXTRACCIÓN ROBUSTA Y MULTINIVEL DE VALORES DE EQUIPO ---
 user_names = {}
 vm_data = {}
 
 league_data = league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
-users_list = league_data.get("users", [])
 
-if isinstance(users_list, list) and len(users_list) > 0:
+# 1. Buscar en el array de usuarios ('users')
+users_list = league_data.get("users", [])
+if isinstance(users_list, list):
     for u in users_list:
         if isinstance(u, dict):
             uid = u.get("id")
             uname = u.get("name")
-            team_val = u.get("teamValue")
-            
+            team_val = u.get("teamValue") or u.get("value") or u.get("marketValue")
             if uid is not None and uname:
                 uid_str = str(uid)
                 user_names[uid_str] = uname
                 if team_val is not None:
                     try:
-                        vm_data[uid_str] = float(team_val)
+                        v = float(team_val)
+                        if v > 0:
+                            vm_data[uid_str] = v
                     except:
                         pass
 
-# Respaldo por seguridad si 'users' estuviera vacío
+# 2. Buscar en la clasificación ('standings') por si estuviera ahí estructurado de otra forma
+standings_list = league_data.get("standings", [])
+if isinstance(standings_list, list):
+    for s in standings_list:
+        if isinstance(s, dict):
+            uid = s.get("id") or s.get("user")
+            if isinstance(uid, dict):
+                uid = uid.get("id")
+            uname = s.get("name") or s.get("username")
+            team_val = s.get("teamValue") or s.get("value") or s.get("marketValue")
+            if uid is not None:
+                uid_str = str(uid)
+                if uname and uid_str not in user_names:
+                    user_names[uid_str] = uname
+                if team_val is not None:
+                    try:
+                        v = float(team_val)
+                        if v > 0:
+                            vm_data[uid_str] = v
+                    except:
+                        pass
+
+# 3. Búsqueda recursiva profunda como red de seguridad para cualquier nodo faltante
+def deep_extract(node):
+    if isinstance(node, dict):
+        uid = node.get("id") or node.get("user") or node.get("userId")
+        if isinstance(uid, dict):
+            uid = uid.get("id")
+        uname = node.get("name") or node.get("username") or node.get("slug")
+        
+        val = None
+        for k in ["teamValue", "value", "marketValue", "team_value"]:
+            if k in node and node[k] is not None:
+                try:
+                    v = float(node[k])
+                    if v > 100000:
+                        val = v
+                        break
+                except:
+                    pass
+        
+        if uid is not None:
+            uid_str = str(uid)
+            if uname and (uid_str not in user_names or len(str(user_names[uid_str])) < len(str(uname))):
+                user_names[uid_str] = uname
+            if val is not None and (uid_str not in vm_data or vm_data[uid_str] == 0.0):
+                vm_data[uid_str] = val
+                
+        for v_sub in node.values():
+            deep_extract(v_sub)
+    elif isinstance(node, list):
+        for item in node:
+            deep_extract(item)
+
+deep_extract(league_resp)
+
+# Inicializar ajustes de usuario y aplicar fallback solo si realmente no se encontró valor en la API
+user_adjustments = {}
+for uid, name in user_names.items():
+    user_adjustments[uid] = 0.0
+    if uid not in vm_data or vm_data[uid] == 0.0:
+        vm_data[uid] = DAY_ONE_VALS.get(str(name).lower(), 21500000.0)
+
 if not user_names:
     for idx, (name_key, def_val) in enumerate(DAY_ONE_VALS.items()):
         uid = str(1000 + idx)
+        user_adjustments[uid] = 0.0
         user_names[uid] = name_key.title()
         vm_data[uid] = def_val
-
-user_adjustments = {}
-for uid in user_names.keys():
-    user_adjustments[uid] = 0.0
-    if uid not in vm_data or vm_data[uid] == 0.0:
-        uname = user_names[uid]
-        vm_data[uid] = DAY_ONE_VALS.get(str(uname).lower(), 21500000.0)
 
 # --- PROCESAR TRANSFERENCIAS Y TABLÓN (LÓGICA INTACTA Y FUNCIONAL) ---
 detected_events_log = []
