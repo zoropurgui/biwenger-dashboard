@@ -31,7 +31,7 @@ def load_data(t):
     try:
         acc = requests.get("https://biwenger.as.com/api/v2/account", headers=h, timeout=8).json()
         leagues = acc.get("data", {}).get("leagues", [])
-        if not leagues: return None, None, {}, {}, {}, {}
+        if not leagues: return None, None, {}, {}, {}
         
         l = leagues[0]
         l_id = l.get("id")
@@ -40,16 +40,16 @@ def load_data(t):
         h_league = h.copy()
         h_league.update({"X-League": str(l_id), "X-User": str(u_id)})
         
-        r_league = requests.get(f"https://biwenger.as.com/api/v2/league/{l_id}", headers=h_league).json()
-        r_squads = requests.get(f"https://biwenger.as.com/api/v2/league/{l_id}/squads", headers=h_league).json()
+        # Petición exacta con include=all igual que en la traza de red
+        r_league = requests.get(f"https://biwenger.as.com/api/v2/league/{l_id}?include=all", headers=h_league).json()
         r_transfers = requests.get(f"https://biwenger.as.com/api/v2/league/{l_id}/transfers?limit=50", headers=h_league).json()
         r_board = requests.get(f"https://biwenger.as.com/api/v2/league/{l_id}/board?limit=50", headers=h_league).json()
         
-        return l_id, u_id, r_league, r_squads, r_transfers, r_board
+        return l_id, u_id, r_league, r_transfers, r_board
     except Exception as e:
-        return None, None, {"error": str(e)}, {}, {}, {}
+        return None, None, {"error": str(e)}, {}, {}
 
-l_id, u_id, league_resp, squads_resp, transfers_resp, board_resp = load_data(clean_token)
+l_id, u_id, league_resp, transfers_resp, board_resp = load_data(clean_token)
 
 if not l_id:
     st.error("❌ Error al conectar con la API de Biwenger. Comprueba tu token.")
@@ -61,41 +61,23 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.rerun()
 
 league_data = league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
-users_list = league_data.get("users", [])
+standings = league_data.get("standings", [])
 
 user_adjustments = {}
 user_names = {}
-for u in users_list:
-    if isinstance(u, dict):
-        uid = u.get("id")
-        uname = u.get("name", "Desconocido")
+vm_data = {}
+
+# Extracción directa y limpia desde standings (como se ve en la captura de red)
+for item in standings:
+    if isinstance(item, dict):
+        uid = item.get("id")
+        uname = item.get("name", "Desconocido")
+        team_val = float(item.get("teamValue", 0))
+        
         if uid:
             user_adjustments[uid] = 0.0
             user_names[uid] = uname
-
-# Extracción robusta del Valor de Mercado (VM) desde squads
-vm_data = {}
-squads_data = squads_resp.get("data", {})
-
-if isinstance(squads_data, dict):
-    for uid_str, squad in squads_data.items():
-        try:
-            uid = int(uid_str)
-            total_vm = float(squad.get("value", 0) or squad.get("teamValue", 0) or 0)
-            if total_vm == 0 and isinstance(squad.get("players"), list):
-                total_vm = sum(float(p.get("price", 0) or p.get("marketValue", 0) or 0) for p in squad["players"])
-            vm_data[uid] = total_vm
-        except Exception:
-            pass
-elif isinstance(squads_data, list):
-    for item in squads_data:
-        if isinstance(item, dict):
-            uid = item.get("user") or item.get("id")
-            total_vm = float(item.get("value", 0) or item.get("teamValue", 0) or 0)
-            if total_vm == 0 and isinstance(item.get("players"), list):
-                total_vm = sum(float(p.get("price", 0) or p.get("marketValue", 0) or 0) for p in item["players"])
-            if uid:
-                vm_data[int(uid)] = total_vm
+            vm_data[uid] = team_val
 
 # Procesar transferencias y tablón
 detected_events_log = []
@@ -178,5 +160,5 @@ if detected_events_log:
 else:
     st.info("ℹ️ No se han detectado movimientos recientes.")
 
-with st.expander("🛠️ Panel de Diagnóstico (Ver estructura de Squads)"):
-    st.json(squads_resp)
+with st.expander("🛠️ Panel de Diagnóstico (Ver Standings)"):
+    st.json(standings)
