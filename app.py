@@ -74,8 +74,9 @@ DAY_ONE_FALLBACK = {
 
 @st.cache_data(ttl=5)
 def fetch_api_data(t_val, l_val, u_val):
-    results = {"status": 0, "league": None, "standings": [], "board": [], "raw_err": ""}
+    results = {"status": 0, "league": None, "standings": [], "board": [], "transfers": [], "raw_err": ""}
     
+    # 1. Liga
     try:
         r = requests.get("https://biwenger.as.com/api/v2/league", headers=headers, timeout=8)
         results["status"] = r.status_code
@@ -88,6 +89,7 @@ def fetch_api_data(t_val, l_val, u_val):
         results["raw_err"] = str(e)
         return results
 
+    # 2. Clasificación
     try:
         rs = requests.get("https://biwenger.as.com/api/v2/league/standings?offset=0&limit=100", headers=headers, timeout=8)
         if rs.status_code == 200:
@@ -95,10 +97,19 @@ def fetch_api_data(t_val, l_val, u_val):
     except Exception:
         pass
 
+    # 3. Tablón
     try:
         rb = requests.get("https://biwenger.as.com/api/v2/league/board?limit=1000", headers=headers, timeout=8)
         if rb.status_code == 200:
             results["board"] = rb.json().get("data", [])
+    except Exception:
+        pass
+
+    # 4. Endpoint directo de Transferencias
+    try:
+        rt = requests.get("https://biwenger.as.com/api/v2/league/transfers?limit=100", headers=headers, timeout=8)
+        if rt.status_code == 200:
+            results["transfers"] = rt.json().get("data", [])
     except Exception:
         pass
 
@@ -109,6 +120,7 @@ status_code = api_data["status"]
 league_info = api_data["league"]
 standings_data = api_data["standings"]
 board_events = api_data["board"]
+direct_transfers = api_data["transfers"]
 
 api_success = status_code == 200 and isinstance(league_info, dict)
 
@@ -190,9 +202,57 @@ else:
             if icon_url != "https://biwenger.as.com/assets/images/user.png":
                 user_stats[uid]["icon"] = icon_url
 
-    # --- PROCESAMIENTO Y REGISTRO DE TRANSACCIONES ---
     detected_transfers = []
+    processed_keys = set()
 
+    # --- 1. PROCESAR ENDPOINT DIRECTO DE TRANSACCIONES ---
+    if isinstance(direct_transfers, list):
+        for tr in direct_transfers:
+            if not isinstance(tr, dict):
+                continue
+            
+            raw_amount = tr.get("amount") or tr.get("price") or tr.get("value") or 0
+            try:
+                amount = float(raw_amount)
+            except (ValueError, TypeError):
+                amount = 0.0
+
+            seller = tr.get("from")
+            seller_id = seller.get("id") if isinstance(seller, dict) else seller
+            try:
+                seller_id = int(seller_id) if seller_id is not None else None
+            except (ValueError, TypeError):
+                seller_id = None
+
+            buyer = tr.get("to") or tr.get("user")
+            buyer_id = buyer.get("id") if isinstance(buyer, dict) else buyer
+            try:
+                buyer_id = int(buyer_id) if buyer_id is not None else None
+            except (ValueError, TypeError):
+                buyer_id = None
+
+            key = f"{seller_id}_{buyer_id}_{amount}"
+            if key in processed_keys:
+                continue
+            processed_keys.add(key)
+
+            if amount > 0:
+                seller_name = id_to_name.get(seller_id, "Mercado") if seller_id else "Mercado"
+                buyer_name = id_to_name.get(buyer_id, "Mercado") if buyer_id else "Mercado"
+
+                if seller_id in user_stats:
+                    user_stats[seller_id]["gained"] += amount
+                if buyer_id in user_stats:
+                    user_stats[buyer_id]["spent"] += amount
+
+                detected_transfers.append({
+                    "Origen": "Transfers API",
+                    "Vendedor": seller_name,
+                    "Comprador": buyer_name,
+                    "Importe (€)": amount
+                })
+
+    # --- 2. PROCESAR TABLÓN DE EVENTOS ---
     if isinstance(board_events, list):
         for event in board_events:
             if not isinstance(event, dict):
@@ -226,11 +286,15 @@ else:
                 except (ValueError, TypeError):
                     buyer_id = None
 
-                # Detectar transferencias/fichajes/ventas
+                key = f"{seller_id}_{buyer_id}_{amount}"
+                if key in processed_keys:
+                    continue
+
                 is_transfer = any(t in ev_type for t in ["transfer", "market", "clause", "purchase", "sale", "assignment", "deal", "trade"])
                 is_bonus = any(t in ev_type for t in ["bonus", "reward", "prize", "admin"])
 
                 if is_transfer and amount > 0:
+                    processed_keys.add(key)
                     seller_name = id_to_name.get(seller_id, "Mercado") if seller_id else "Mercado"
                     buyer_name = id_to_name.get(buyer_id, "Mercado") if buyer_id else "Mercado"
                     
@@ -240,19 +304,20 @@ else:
                         user_stats[buyer_id]["spent"] += amount
 
                     detected_transfers.append({
-                        "Tipo": "Venta/Fichaje",
+                        "Origen": "Tablón",
                         "Vendedor": seller_name,
                         "Comprador": buyer_name,
                         "Importe (€)": amount
                     })
 
                 elif is_bonus and amount > 0:
+                    processed_keys.add(key)
                     buyer_name = id_to_name.get(buyer_id, "Mánager")
                     if buyer_id in user_stats:
                         user_stats[buyer_id]["gained"] += amount
 
                     detected_transfers.append({
-                        "Tipo": "Prima/Abono",
+                        "Origen": "Tablón (Abono)",
                         "Vendedor": "Administrador",
                         "Comprador": buyer_name,
                         "Importe (€)": amount
@@ -306,11 +371,10 @@ else:
         height=calculated_height
     )
 
-    # --- DESPLEGABLE DE AUDITORÍA DE TRANSACCIONES DETECTADAS ---
     with st.expander("📜 Ver Fichajes y Ventas Detectados por el Monitor"):
         if detected_transfers:
             df_trans = pd.DataFrame(detected_transfers)
             df_trans["Importe (€)"] = df_trans["Importe (€)"].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
             st.dataframe(df_trans, use_container_width=True, hide_index=True)
         else:
-            st.info("Aún no se han detectado movimientos de mercado registrados en el tablón de Biwenger.")
+            st.info("Aún no se han detectado movimientos de mercado registrados en Biwenger.")
