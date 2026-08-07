@@ -15,6 +15,8 @@ if not token:
 
 clean_token = token.strip().replace("Bearer ", "").strip()
 
+INITIAL_TOTAL = 40000000.0
+
 @st.cache_data(ttl=30)
 def load_data(t):
     h = {"Authorization": f"Bearer {t}", "X-App-Version": "2.0.0"}
@@ -49,88 +51,122 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
     st.rerun()
 
-# --- BASE DE DATOS DE SEGURIDAD (Valores reales de referencia) ---
-KNOWN_MANAGERS = {
-    "marroba": {"name": "Marroba", "teamValue": 21410000.0, "balance": 18515000.0},
-    "athletik81": {"name": "Athletik81", "teamValue": 21600000.0, "balance": 18300000.0},
-    "ring014": {"name": "Ring014", "teamValue": 21580000.0, "balance": 18320000.0},
-    "tubu": {"name": "Tubu", "teamValue": 21570000.0, "balance": 18330000.0},
-    "nitwolf": {"name": "Nitwolf", "teamValue": 21550000.0, "balance": 18350000.0},
-    "nistalikus": {"name": "nistalikus", "teamValue": 21550000.0, "balance": 18350000.0},
-    "moltisanti": {"name": "Moltisanti", "teamValue": 21540000.0, "balance": 18360000.0},
-    "gran gravessen": {"name": "Gran Gravessen", "teamValue": 21540000.0, "balance": 18360000.0},
-    "zoropurgui": {"name": "zoropurgui", "teamValue": 21530000.0, "balance": 18370000.0},
-    "_caesar_": {"name": "_Caesar_", "teamValue": 21510000.0, "balance": 18390000.0},
-    "nitrorx": {"name": "NiTrOrX", "teamValue": 21490000.0, "balance": 18410000.0},
-    "zhukkov": {"name": "Zhukkov", "teamValue": 21240000.0, "balance": 18660000.0},
-    "yoqsetio xdxd": {"name": "YOQSETIO XDXD", "teamValue": 21870000.0, "balance": 18030000.0}
+# --- VALORES DE REFERENCIA / FALLBACK DE SEGURIDAD ---
+DAY_ONE_VALS = {
+    "athletik81": 21600000.0, "ring014": 21580000.0, "tubu": 21570000.0, 
+    "marroba": 21410000.0, "zhukkov": 21240000.0, "nitwolf": 21550000.0, 
+    "yoqsetio xdxd": 21870000.0, "nistalikus": 21550000.0, "moltisanti": 21540000.0, 
+    "gran gravessen": 21540000.0, "zoropurgui": 21530000.0, "_caesar_": 21510000.0, 
+    "nitrorx": 21490000.0
 }
 
-# --- EXTRACCIÓN INTELIGENTE E HÍBRIDA ---
+# --- EXTRACCIÓN BLINDADA Y ROBUSTA ---
 league_data = league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
-standings = league_data.get("standings", [])
-users_list = league_data.get("users", [])
 
-financial_data = {}
+raw_list = []
+for key_name in ["standings", "users", "members"]:
+    val = league_data.get(key_name)
+    if isinstance(val, list) and len(val) > 0:
+        raw_list = val
+        break
+    elif isinstance(val, dict) and len(val) > 0:
+        raw_list = list(val.values())
+        break
+
+user_names = {}
+vm_data = {}
+api_balance_data = {}
 extraction_debug_logs = []
 
-# Recopilar de standings y users
-raw_combined = []
-if isinstance(standings, list): raw_combined.extend(standings)
-if isinstance(users_list, list): raw_combined.extend(users_list)
+if raw_list:
+    for item in raw_list:
+        if not isinstance(item, dict): continue
+        
+        uid = item.get("id")
+        uname = item.get("name") or item.get("username")
+        
+        if uid is None and isinstance(item.get("user"), dict):
+            uid = item.get("user").get("id")
+            uname = item.get("user").get("name") or item.get("user").get("username")
+            
+        if uid is None and uname is not None:
+            uid = str(uname).lower().strip()
+        elif uid is not None:
+            uid = str(uid)
+            
+        if uid and uname:
+            user_names[uid] = uname
+            
+            # Buscar teamValue de forma exhaustiva
+            t_val = None
+            for k in ["teamValue", "value", "marketValue", "price", "team_value"]:
+                if k in item and item[k] is not None:
+                    try:
+                        val = float(item[k])
+                        if val > 0:
+                            t_val = val
+                            break
+                    except:
+                        pass
+            
+            if t_val is not None:
+                vm_data[uid] = t_val
+                
+            extraction_debug_logs.append({
+                "ID": uid,
+                "Usuario": uname,
+                "teamValue_extraido": t_val if t_val else "NO ENCONTRADO",
+                "Keys disponibles": list(item.keys())
+            })
 
-for item in raw_combined:
-    if not isinstance(item, dict): continue
-    uid = item.get("id")
-    if uid is None and isinstance(item.get("user"), dict):
-        uid = item.get("user").get("id")
-        
-    uname = item.get("name") or item.get("username")
-    if not uname and isinstance(item.get("user"), dict):
-        uname = item.get("user").get("name") or item.get("user").get("username")
-        
-    if uid is not None or uname:
-        uid_str = str(uid) if uid is not None else str(uname).lower()
-        key_lookup = str(uname).lower() if uname else ""
-        
-        # Obtener valores de la API o usar respaldo conocido
-        t_val = float(item.get("teamValue", 0) or item.get("value", 0) or 0)
-        b_val = item.get("balance")
-        if b_val is None: b_val = item.get("money")
-        
-        # Si la API no trae el valor, buscar en conocidos
-        default_info = KNOWN_MANAGERS.get(key_lookup, {"teamValue": 21500000.0, "balance": 18500000.0})
-        
-        final_t_val = t_val if t_val > 0 else default_info["teamValue"]
-        final_b_val = float(b_val) if b_val is not None else default_info["balance"]
-        final_name = uname or default_info.get("name", f"Mánager {uid_str}")
-        
-        financial_data[uid_str] = {
-            "name": final_name,
-            "teamValue": final_t_val,
-            "balance": final_b_val
-        }
+# GARANTÍA ABSOLUTA: Si por lo que sea no se cargó ningún usuario de la API, usamos el mapa completo
+if not user_names:
+    for name, val in DAY_ONE_VALS.items():
+        uid = name.replace(" ", "_")
+        user_names[uid] = name.title()
+        if uid not in vm_data:
+            vm_data[uid] = val
 
-# Asegurar que todos los conocidos estén presentes si la API venía vacía
-for k, def_val in KNOWN_MANAGERS.items():
-    if not any(k in str(d["name"]).lower() for d in financial_data.values()):
-        financial_data[k] = {
-            "name": def_val["name"],
-            "teamValue": def_val["teamValue"],
-            "balance": def_val["balance"]
-        }
+# Asegurar que ningún usuario de DAY_ONE_VALS se quede sin valor actual
+for uid, name in list(user_names.items()):
+    if uid not in vm_data or vm_data[uid] == 0.0:
+        # Buscar por nombre en minúsculas si el ID no coincide
+        match_val = None
+        for d_name, d_val in DAY_ONE_VALS.items():
+            if d_name in str(name).lower():
+                match_val = d_val
+                break
+        vm_data[uid] = match_val if match_val else 21500000.0
 
-# --- PROCESAR TRASPASOS RECIENTES ---
-transfers = transfers_resp.get("data", []) if isinstance(transfers_resp, dict) else []
-board = board_resp.get("data", []) if isinstance(board_resp, dict) else []
+user_adjustments = {uid: 0.0 for uid in user_names.keys()}
+
+# --- PROCESAR TRANSFERENCIAS Y TABLÓN ---
 detected_events_log = []
 
+def add_money(uid, amt, desc):
+    uid_str = str(uid)
+    if uid_str in user_adjustments and amt > 0:
+        user_adjustments[uid_str] += amt
+        detected_events_log.append({"Usuario": user_names.get(uid_str, uid_str), "Importe (€)": amt, "Descripción": desc})
+
+def sub_money(uid, amt, desc):
+    uid_str = str(uid)
+    if uid_str in user_adjustments and amt > 0:
+        user_adjustments[uid_str] -= amt
+        detected_events_log.append({"Usuario": user_names.get(uid_str, uid_str), "Importe (€)": -amt, "Descripción": desc})
+
+transfers = transfers_resp.get("data", []) if isinstance(transfers_resp, dict) else []
 if isinstance(transfers, list):
     for t in transfers:
         if not isinstance(t, dict): continue
         amt = float(t.get("amount", 0) or t.get("price", 0) or 0)
-        detected_events_log.append({"Movimiento": "Traspaso de Jugador", "Detalle": f"Operación de {amt:,.0f} €"})
+        s = t.get("from"); b = t.get("to")
+        if isinstance(s, dict): s = s.get("id")
+        if isinstance(b, dict): b = b.get("id")
+        if s is not None: add_money(str(s), amt, "Venta de Jugador")
+        if b is not None: sub_money(str(b), amt, "Compra de Jugador")
 
+board = board_resp.get("data", []) if isinstance(board_resp, dict) else []
 if isinstance(board, list):
     for item in board:
         if not isinstance(item, dict): continue
@@ -139,20 +175,39 @@ if isinstance(board, list):
         for el in elements:
             if not isinstance(el, dict): continue
             amt = float(el.get("amount", 0) or el.get("price", 0) or el.get("value", 0) or 0)
-            if amt > 0:
-                detected_events_log.append({"Movimiento": "Movimiento en Tablón", "Detalle": f"Operación de {amt:,.0f} €"})
+            from_obj = el.get("from")
+            to_obj = el.get("to")
+            s_id = from_obj.get("id") if isinstance(from_obj, dict) else from_obj
+            b_id = to_obj.get("id") if isinstance(to_obj, dict) else to_obj
+            if s_id is not None and b_id is None and amt > 0:
+                add_money(str(s_id), amt, "Venta Inmediata a Máquina")
+            elif s_id is not None and b_id is not None and amt > 0:
+                add_money(str(s_id), amt, "Venta entre mánagers")
+                sub_money(str(b_id), amt, "Compra entre mánagers")
 
 # --- CONSTRUCCIÓN DE LA TABLA FINANCIERA ---
 records = []
-for uid, data in financial_data.items():
-    v_actual = data["teamValue"]
-    saldo_real = data["balance"]
+for uid, name in user_names.items():
+    v_actual = vm_data.get(uid, 21500000.0)
     
+    if uid in api_balance_data:
+        saldo_real = api_balance_data[uid] + user_adjustments.get(uid, 0.0)
+    else:
+        # Calcular saldo inicial estimado basándose en el valor de día uno
+        d_val = None
+        for d_key, d_v in DAY_ONE_VALS.items():
+            if d_key in str(name).lower():
+                d_val = d_v
+                break
+        v_inicial = d_val if d_val else 21500000.0
+        ajuste = user_adjustments.get(uid, 0.0)
+        saldo_real = (INITIAL_TOTAL - v_inicial) + ajuste
+        
     valor_total_caja = v_actual + saldo_real
     puja_max = saldo_real + ((max_bid_pct / 100.0) * v_actual)
     
     records.append({
-        "Usuario": data["name"],
+        "Usuario": name,
         "Valor del equipo": v_actual,
         "Dinero en caja": saldo_real,
         "Valor equipo + caja": valor_total_caja,
@@ -173,9 +228,20 @@ st.markdown("---")
 st.subheader("📜 Historial de Traspasos y Movimientos Detectados")
 if detected_events_log:
     df_log = pd.DataFrame(detected_events_log)
+    df_log["Importe (€)"] = df_log["Importe (€)"].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
     st.dataframe(df_log, use_container_width=True, hide_index=True)
 else:
     st.info("ℹ️ No se han detectado movimientos recientes.")
+
+# --- DIAGNÓSTICO ---
+with st.expander("🔍 Diagnóstico: Extracción Blindada", expanded=False):
+    st.markdown("Comprueba aquí los valores extraídos y el origen de los datos.")
+    if extraction_debug_logs:
+        df_debug = pd.DataFrame(extraction_debug_logs)
+        df_debug["Keys disponibles"] = df_debug["Keys disponibles"].apply(lambda x: ", ".join(str(k) for k in x) if isinstance(x, list) else str(x))
+        st.dataframe(df_debug, use_container_width=True, hide_index=True)
+    else:
+        st.write("Se han utilizado los valores por defecto del sistema por seguridad.")
 
 with st.expander("🛠️ Panel de Diagnóstico (Ver Respuesta Bruta de la Liga)"):
     st.json(league_resp)
