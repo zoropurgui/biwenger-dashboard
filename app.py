@@ -4,7 +4,7 @@ import requests
 
 st.set_page_config(page_title="Biwenger Financial Monitor Pro", page_icon="⚽", layout="wide")
 
-st.title("⚽ Monitor Financiero Biwenger (Versión Completa y Definitiva)")
+st.title("⚽ Monitor Financiero Biwenger (Definitivo)")
 
 # --- SIDEBAR: Configuración ---
 st.sidebar.header("🔑 Conexión")
@@ -34,7 +34,7 @@ def fetch_all_biwenger_data(t):
     try:
         acc = requests.get("https://biwenger.as.com/api/v2/account", headers=h, timeout=8).json()
         leagues = acc.get("data", {}).get("leagues", [])
-        if not leagues: return None, None, {}, {}, {}, {}
+        if not leagues: return None, None, {}, {}, {}, {}, {}
         
         l = leagues[0]
         l_id, u_id = l.get("id"), l.get("user", {}).get("id")
@@ -63,17 +63,27 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
     st.rerun()
 
-# Extraer usuarios
+# Extraer usuarios combinando la liga y los standings
 league_data = league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
 users_list = league_data.get("users", [])
-if not users_list and isinstance(standings_resp, dict):
-    users_list = standings_resp.get("data", [])
+standings_data = standings_resp.get("data", []) if isinstance(standings_resp, dict) else []
+
+if not users_list and isinstance(standings_data, list):
+    users_list = standings_data
 
 if not users_list:
     users_list = [{"id": i, "name": name.title()} for i, name in enumerate(DAY_ONE_VALS.keys())]
 
-user_adjustments = {u.get("id"): 0.0 for u in users_list if isinstance(u, dict)}
-user_names = {u.get("id"): u.get("name", "Desconocido") for u in users_list if isinstance(u, dict)}
+user_adjustments = {}
+user_names = {}
+for u in users_list:
+    if isinstance(u, dict):
+        u_id = u.get("id")
+        u_name = u.get("name", "Desconocido")
+        if u_id:
+            user_adjustments[u_id] = 0.0
+            user_names[u_id] = u_name
+
 detected_events_log = []
 
 def add_money(user_id, amount, desc):
@@ -118,31 +128,40 @@ if isinstance(board, list):
                 add_money(int(s_id), amt, "Venta entre mánagers")
                 sub_money(int(b_id), amt, "Compra entre mánagers")
 
-# Extracción robusta de VM (Suma de squads o propiedades directas)
-squads_data = squads_resp.get("data", {}) if isinstance(squads_resp, dict) else {}
+# Extracción ultra robusta del VM buscando en standings, squads o propiedades internas
 vm_data = {}
 
+# 1. Buscar en standings (que es de donde sale la vista web)
+if isinstance(standings_data, list):
+    for item in standings_data:
+        if isinstance(item, dict):
+            u_id = item.get("id")
+            # Buscar teamValue en múltiples rutas posibles dentro del objeto de standings
+            tv = (
+                item.get("teamValue") or 
+                item.get("value") or 
+                (item.get("stat") or {}).get("teamValue") or
+                (item.get("account") or {}).get("teamValue") or
+                0.0
+            )
+            if u_id and tv > 0:
+                vm_data[int(u_id)] = float(tv)
+
+# 2. Si falta alguno, buscar en squads sumando jugadores
+squads_data = squads_resp.get("data", {}) if isinstance(squads_resp, dict) else {}
 if isinstance(squads_data, dict):
     for u_id_str, squad in squads_data.items():
         try:
             u_id = int(u_id_str)
-            total_vm = 0
-            players = squad.get("players", []) if isinstance(squad, dict) else []
-            for p in players:
-                total_vm += float(p.get("price", 0) or p.get("marketValue", 0) or 0)
-            vm_data[u_id] = total_vm
+            if u_id not in vm_data or vm_data[u_id] == 0:
+                total_vm = 0
+                players = squad.get("players", []) if isinstance(squad, dict) else []
+                for p in players:
+                    total_vm += float(p.get("price", 0) or p.get("marketValue", 0) or 0)
+                if total_vm > 0:
+                    vm_data[u_id] = total_vm
         except Exception:
             pass
-
-# Fallback: si squads viene vacío, leemos teamValue directamente de standings
-if not vm_data and isinstance(standings_resp, dict):
-    st_data = standings_resp.get("data", [])
-    if isinstance(st_data, list):
-        for item in st_data:
-            if isinstance(item, dict):
-                u_id = item.get("id")
-                tv = float(item.get("teamValue", 0) or item.get("value", 0) or 0)
-                if u_id: vm_data[int(u_id)] = tv
 
 # --- CONSTRUCCIÓN DE LA TABLA FINANCIERA ---
 records = []
@@ -178,7 +197,7 @@ if records:
 else:
     st.warning("⚠️ No hay datos para mostrar en la tabla.")
 
-# --- HISTORIAL DE TRASPASOS Y MOVIMIENTOS (RESTAURADO) ---
+# --- HISTORIAL DE TRASPASOS Y MOVIMIENTOS ---
 st.markdown("---")
 st.subheader("📜 Historial de Traspasos y Movimientos Detectados")
 if detected_events_log:
@@ -190,7 +209,5 @@ else:
 
 # --- PANEL DE DIAGNÓSTICO TÉCNICO ---
 with st.expander("🛠️ Panel de Diagnóstico Técnico (Ver respuestas brutas de la API)"):
-    st.write("**Squads Response:**")
-    st.json(squads_resp)
-    st.write("**Standings Response:**")
+    st.write("**Standings Response (Datos de la tabla web):**")
     st.json(standings_resp)
