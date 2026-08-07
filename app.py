@@ -59,27 +59,22 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
     st.rerun()
 
-# --- EXTRACCIÓN RECURSIVA INTELIGENTE DE VALORES ACTUALES ---
-def extract_users_from_json(data):
-    users = []
-    if isinstance(data, list):
-        for item in data:
-            if isinstance(item, dict) and ("id" in item or "name" in item):
-                users.append(item)
-    elif isinstance(data, dict):
-        for key in ["users", "standings", "members", "data", "ranking", "participants"]:
-            val = data.get(key)
-            if val is not None:
-                res = extract_users_from_json(val)
-                if res:
-                    return res
-        for k, v in data.items():
-            res = extract_users_from_json(v)
-            if res:
-                return res
-    return users
+# --- EXTRACCIÓN DIRECTA Y REAL DEL VALOR DE EQUIPO ---
+def find_user_standings(node, results=None):
+    if results is None:
+        results = []
+    if isinstance(node, dict):
+        if "teamValue" in node and ("name" in node or "id" in node):
+            results.append(node)
+        else:
+            for v in node.values():
+                find_user_standings(v, results)
+    elif isinstance(node, list):
+        for item in node:
+            find_user_standings(item, results)
+    return results
 
-standings_list = extract_users_from_json(league_resp)
+standings_list = find_user_standings(league_resp)
 
 user_adjustments = {}
 user_names = {}
@@ -89,50 +84,21 @@ for item in standings_list:
     if not isinstance(item, dict):
         continue
     
-    raw_uid = item.get("id") or item.get("user") or item.get("userId") or item.get("user_id")
+    raw_uid = item.get("id") or item.get("user")
     if isinstance(raw_uid, dict):
         raw_uid = raw_uid.get("id")
     if raw_uid is None:
         continue
     uid = str(raw_uid)
     
-    uname = item.get("name") or item.get("username") or item.get("slug") or f"Usuario {uid}"
+    uname = item.get("name") or item.get("username") or f"Usuario {uid}"
+    team_val = float(item.get("teamValue", 0) or 0)
     
-    # Extracción en tiempo real del valor del equipo (teamValue)
-    team_val = 0.0
-    for k in ["teamValue", "value", "team_value", "vm", "totalValue", "team_price"]:
-        if k in item and item[k] is not None:
-            try:
-                val = float(item[k])
-                if val > 0:
-                    team_val = val
-                    break
-            except:
-                pass
-                
-    if team_val == 0.0:
-        for sub_key in ["account", "team", "user", "profile"]:
-            sub_obj = item.get(sub_key)
-            if isinstance(sub_obj, dict):
-                for k in ["teamValue", "value", "team_value", "vm", "totalValue"]:
-                    if k in sub_obj and sub_obj[k] is not None:
-                        try:
-                            val = float(sub_obj[k])
-                            if val > 0:
-                                team_val = val
-                                break
-                        except:
-                            pass
-                if team_val > 0:
-                    break
-
-    if team_val == 0.0:
-        team_val = DAY_ONE_VALS.get(uname.lower(), 21500000.0)
-
     user_adjustments[uid] = 0.0
     user_names[uid] = uname
     vm_data[uid] = team_val
 
+# Fallback por seguridad si la API no devolviera los standings
 if not user_names:
     for idx, (name_key, def_val) in enumerate(DAY_ONE_VALS.items()):
         uid = str(1000 + idx)
@@ -140,7 +106,7 @@ if not user_names:
         user_names[uid] = name_key.title()
         vm_data[uid] = def_val
 
-# Procesar transferencias y tablón
+# Procesar transferencias y tablón (Lógica intacta que ya te funciona)
 detected_events_log = []
 
 def add_money(uid, amt, desc):
