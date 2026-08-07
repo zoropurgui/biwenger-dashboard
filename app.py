@@ -60,7 +60,7 @@ if not l_id:
   st.stop()
 
 max_bid_pct = st.sidebar.slider("Crédito Valor Equipo (%)", 0, 100, 25)
-if st.sidebar.button("🔄 Recargar Datos"):
+if st.button("🔄 Recargar Datos"):
   st.cache_data.clear()
   st.rerun()
 
@@ -197,10 +197,12 @@ for uid, name in user_names.items():
   v_inicial = get_day_one_val(name)
   v_actual = current_vm_data.get(uid, v_inicial)
   ajuste = user_adjustments.get(uid, 0.0)
-  saldo_real = (INITIAL_TOTAL - v_inicial) - ajuste
+  
+  # AQUI ESTÁ LA CORRECCIÓN: Usamos "+" para el ajuste
+  saldo_real = (INITIAL_TOTAL - v_inicial) + ajuste
   
   records.append({
-      "UID": uid, # Oculto en la edición
+      "UID": uid,
       "Usuario": name,
       "Valor actual del equipo": v_actual,
       "Valor de equipo día 1": v_inicial,
@@ -212,25 +214,16 @@ if records:
   st.subheader("📊 Monitor Financiero en Directo")
   st.write("✏️ *Edita el valor en la columna 'Valor actual del equipo' y pulsa Enter.*")
   
-  # Creamos el editor
   df_editor = pd.DataFrame(records)
-  # Editamos solo lo necesario
   edited_df = st.data_editor(df_editor.drop(columns=["UID"]), use_container_width=True, hide_index=True)
   
-  # --- RE-CALCULAR CON EL VALOR EDITADO ---
   df_final = edited_df.copy()
   
-  # Recuperamos el UID de la lista original para mantener la lógica de los ajustes
-  uid_map = {r["Usuario"]: r["UID"] for r in records}
-  
-  # Recalculamos valores basándonos en lo que el usuario haya editado en 'Valor actual del equipo'
   df_final["Valor equipo + caja"] = df_final["Valor actual del equipo"] + df_final["Dinero en caja (calculado)"]
   df_final["Puja máxima"] = df_final["Dinero en caja (calculado)"] + ((max_bid_pct / 100.0) * df_final["Valor actual del equipo"])
   
-  # Ordenar por valor total
   df_final = df_final.sort_values("Valor equipo + caja", ascending=False)
   
-  # Formatear para mostrar
   cols_to_format = ["Valor actual del equipo", "Valor de equipo día 1", "Dinero en caja (calculado)", "Balance (ajuste)", "Valor equipo + caja", "Puja máxima"]
   
   display_df = df_final.copy()
