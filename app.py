@@ -59,7 +59,7 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
     st.rerun()
 
-# --- EXTRACCIÓN FIABLE Y DIRECTA DEL VALOR DE EQUIPO (DESDE STANDINGS) ---
+# --- EXTRACCIÓN DIRECTA Y LIMPIA DESDE 'standings' (ESTRUCTURA OFICIAL DE LA API) ---
 user_names = {}
 vm_data = {}
 
@@ -82,7 +82,7 @@ if isinstance(standings_list, list) and len(standings_list) > 0:
                     except:
                         pass
 
-# Respaldo recursivo por si standings viniera vacío o incompleto
+# Respaldo recursivo por seguridad por si la estructura variase en algún momento
 if not user_names:
     def extract_from_node(node):
         if isinstance(node, dict):
