@@ -66,11 +66,17 @@ def get_all_data(league_id):
     return r_users, r_transfers, r_board
 
 users_resp, transfers_resp, board_resp = get_all_data(l_id)
-users_data = users_resp.get("data", {}).get("users", [])
+
+league_data = users_resp.get("data", {})
+# Usamos 'standings' que es donde Biwenger almacena el valor de equipo y la clasificación real
+users_data = league_data.get("standings", [])
+if not users_data:
+    # Fallback por si acaso usa la clave 'users'
+    users_data = league_data.get("users", [])
+
 transfers = transfers_resp.get("data", [])
 board = board_resp.get("data", [])
 
-# --- LÓGICA DE CÁLCULO ---
 user_adjustments = {u.get("id"): 0.0 for u in users_data}
 user_names = {u.get("id"): u.get("name") for u in users_data}
 detected_events_log = []
@@ -85,15 +91,18 @@ def sub_money(user_id, amount, desc):
         user_adjustments[user_id] -= amount
         detected_events_log.append({"Usuario": user_names.get(user_id, str(user_id)), "Importe (€)": -amount, "Descripción": desc})
 
+# 1. Procesar transferencias formales
 for t in transfers:
     if not isinstance(t, dict): continue
     amt = float(t.get("amount", 0) or t.get("price", 0) or 0)
-    s = t.get("from"); b = t.get("to")
-    if isinstance(s, dict): s = s.get("id")
-    if isinstance(b, dict): b = b.get("id")
-    if s: add_money(int(s), amt, "Venta")
-    if b: sub_money(int(b), amt, "Compra")
+    seller = t.get("from")
+    if isinstance(seller, dict): seller = seller.get("id")
+    buyer = t.get("to")
+    if isinstance(buyer, dict): buyer = buyer.get("id")
+    if seller: add_money(int(seller), amt, "Venta")
+    if buyer: sub_money(int(buyer), amt, "Compra")
 
+# 2. Procesar el Tablón (Feed)
 for item in board:
     if not isinstance(item, dict): continue
     content = item.get("content")
@@ -101,9 +110,12 @@ for item in board:
     for el in elements:
         if not isinstance(el, dict): continue
         amt = float(el.get("amount", 0) or el.get("price", 0) or el.get("value", 0) or 0)
-        s_id = el.get("from").get("id") if isinstance(el.get("from"), dict) else el.get("from")
-        b_id = el.get("to").get("id") if isinstance(el.get("to"), dict) else el.get("to")
-        if s_id and not b_id and amt > 0: add_money(int(s_id), amt, "Venta Inmediata")
+        from_obj = el.get("from")
+        to_obj = el.get("to")
+        s_id = from_obj.get("id") if isinstance(from_obj, dict) else from_obj
+        b_id = to_obj.get("id") if isinstance(to_obj, dict) else to_obj
+        if s_id and not b_id and amt > 0:
+            add_money(int(s_id), amt, "Venta Inmediata a Máquina")
         elif s_id and b_id and amt > 0:
             add_money(int(s_id), amt, "Venta entre mánagers")
             sub_money(int(b_id), amt, "Compra entre mánagers")
@@ -114,7 +126,7 @@ for u in users_data:
     u_id = u.get("id")
     name = str(u.get("name", "Desconocido")).lower()
     
-    # Intento de obtener Valor Equipo: prueba con teamValue, si falla busca alternativas
+    # Extraemos el valor del equipo directamente de 'standings' (teamValue o value)
     v_actual = float(u.get("teamValue") or u.get("value") or 0)
     
     v_inicial = DAY_ONE_VALS.get(name, 21500000.0)
@@ -134,18 +146,19 @@ for u in users_data:
 
 df = pd.DataFrame(records).sort_values("Dinero en caja", ascending=False)
 
-# Formateo visual
 for col in ["Valor del equipo", "Dinero en caja", "Valor equipo + caja", "Puja máxima"]:
     df[col] = df[col].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
 
 st.subheader("📊 Monitor Financiero en Directo")
 st.dataframe(df, use_container_width=True, hide_index=True)
 
-# Expander de diagnóstico en caso de que siga saliendo 0
-with st.expander("🔍 Ver transacciones y ventas a la máquina | 🛠️ Diagnóstico si valor es 0"):
-    st.write("Datos brutos del primer usuario (busca el campo del valor):")
+with st.expander("🔍 Ver transacciones y ventas a la máquina | 🛠️ Diagnóstico"):
+    st.write("Estructura de datos obtenida (Standings):")
     st.json(users_data[0] if users_data else {})
     
     if detected_events_log:
         df_log = pd.DataFrame(detected_events_log)
-        st.dataframe(df_log, use_container_width=True)
+        df_log["Importe (€)"] = df_log["Importe (€)"].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
+        st.dataframe(df_log, use_container_width=True, hide_index=True)
+    else:
+        st.info("No se han detectado movimientos todavía.")
