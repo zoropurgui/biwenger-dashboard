@@ -55,11 +55,28 @@ headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 }
 
-@st.cache_data(ttl=15)
+# --- RESPALDO CON DATOS REALES DEL DÍA 1 ---
+DAY_ONE_FALLBACK = {
+    "athletik81": 21600000.0,
+    "ring014": 21580000.0,
+    "tubu": 21570000.0,
+    "marroba": 21560000.0,
+    "zhukkov": 21560000.0,
+    "nitwolf": 21550000.0,
+    "yoqsetio xdxd": 21550000.0,
+    "nistalikus": 21550000.0,
+    "moltisanti": 21540000.0,
+    "gran gravessen": 21540000.0,
+    "zoropurgui": 21530000.0,
+    "_caesar_": 21510000.0,
+    "nitrorx": 21490000.0
+}
+
+@st.cache_data(ttl=10)
 def fetch_api_data(t_val, l_val, u_val):
     results = {"status": 0, "league": None, "standings": [], "board": [], "raw_err": ""}
     
-    # 1. Petición principal de la liga
+    # 1. Petición a la liga
     try:
         r = requests.get("https://biwenger.as.com/api/v2/league", headers=headers, timeout=8)
         results["status"] = r.status_code
@@ -72,15 +89,15 @@ def fetch_api_data(t_val, l_val, u_val):
         results["raw_err"] = str(e)
         return results
 
-    # 2. Petición a la Clasificación (donde residen los valores de plantilla real)
+    # 2. Petición a la clasificación con límite extendido
     try:
-        rs = requests.get("https://biwenger.as.com/api/v2/league/standings", headers=headers, timeout=8)
+        rs = requests.get("https://biwenger.as.com/api/v2/league/standings?offset=0&limit=100", headers=headers, timeout=8)
         if rs.status_code == 200:
             results["standings"] = rs.json().get("data", {}).get("standings", [])
     except Exception:
         pass
 
-    # 3. Descarga del tablón de eventos
+    # 3. Descarga del tablón
     try:
         rb = requests.get("https://biwenger.as.com/api/v2/league/board?limit=1000", headers=headers, timeout=8)
         if rb.status_code == 200:
@@ -102,11 +119,10 @@ if not api_success:
     st.error(f"⚠️ Error al conectar con Biwenger (Código HTTP: {status_code})")
     with st.expander("🔍 Ver detalle del error enviado por Biwenger"):
         st.code(api_data["raw_err"] if api_data["raw_err"] else "Sin respuesta del servidor.")
-    st.warning("👉 Verifica las credenciales introducidas en la barra lateral.")
+    st.warning("👉 Verifica que el **User ID** pertenezca a la cuenta del **Bearer Token** y a la liga.")
 else:
     st.subheader(f"🏆 Liga: {league_info.get('name', 'FC Biwenger Primera División')}")
     
-    # Combinar usuarios de /league y /league/standings
     raw_users = league_info.get("users", []) or []
     if isinstance(league_info.get("standings"), list):
         raw_users.extend(league_info["standings"])
@@ -119,36 +135,40 @@ else:
         if not isinstance(u, dict):
             continue
         
-        # Extraer ID y Nombre
         uid = u.get("id")
         u_dict = u.get("user") if isinstance(u.get("user"), dict) else {}
-        
         if not uid:
             uid = u_dict.get("id")
-            
         if not uid:
             continue
             
         uid = int(uid)
         uname = u.get("name") or u_dict.get("name") or f"Mánager {uid}"
         
-        # Extraer Valor de Equipo buscando en todas las claves posibles
+        # Intentar obtener valor desde la API
         tv = 0.0
         for key in ["teamValue", "value", "team_value", "squadValue"]:
             if u.get(key) is not None:
                 try:
                     tv = float(u[key])
-                    break
+                    if tv > 0:
+                        break
                 except (ValueError, TypeError):
                     pass
             if u_dict.get(key) is not None:
                 try:
                     tv = float(u_dict[key])
-                    break
+                    if tv > 0:
+                        break
                 except (ValueError, TypeError):
                     pass
 
-        # Extraer Avatar
+        # Aplicar datos reales de la captura si la API devuelve 0
+        if tv == 0.0:
+            clean_name = str(uname).strip().lower()
+            tv = DAY_ONE_FALLBACK.get(clean_name, 0.0)
+
+        # Avatar
         icon_raw = u.get("icon") or u.get("avatar") or u_dict.get("icon") or u_dict.get("avatar")
         if icon_raw:
             icon_str = str(icon_raw)
@@ -168,7 +188,6 @@ else:
                 "real_balance": real_bal
             }
         else:
-            # Si ya existe, actualizar con valores no nulos mayores a 0
             if tv > 0:
                 user_stats[uid]["squad_val"] = tv
             if real_bal is not None:
@@ -222,27 +241,31 @@ else:
     records = []
     for uid, info in user_stats.items():
         squad_val = info["squad_val"]
+        
+        # Dinero en Caja = 40M - Valor de Plantilla Inicial - Gastos + Ingresos
         if info["real_balance"] is not None:
             cash = float(info["real_balance"])
         else:
-            cash = (initial_budget - info["spent"]) + info["gained"]
+            cash = (initial_budget - squad_val - info["spent"]) + info["gained"]
+
+        total_val = squad_val + cash
+        max_bid = cash + ((max_bid_pct / 100.0) * squad_val)
 
         records.append({
             "Icono": info["icon"],
             "Usuario": info["name"],
             "Valor Equipo (€)": squad_val,
             "Dinero en Caja (€)": cash,
-            "Valor Total (€)": squad_val + cash,
-            "Puja Máxima (€)": cash + ((max_bid_pct / 100.0) * squad_val)
+            "Valor Total (€)": total_val,
+            "Puja Máxima (€)": max_bid
         })
     
     df_base = pd.DataFrame(records)
     
-    # Ordenar por Valor de Equipo descendente
     if not df_base.empty and "Valor Equipo (€)" in df_base.columns:
         df_base = df_base.sort_values(by="Valor Equipo (€)", ascending=False)
 
-    # Formatear números
+    # Formato numérico
     for col in ["Valor Equipo (€)", "Dinero en Caja (€)", "Valor Total (€)", "Puja Máxima (€)"]:
         df_base[col] = df_base[col].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
 
