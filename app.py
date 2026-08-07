@@ -1,6 +1,9 @@
 import pandas as pd
 import requests
 import streamlit as st
+import easyocr  # <--- NUEVO
+import numpy as np # <--- NUEVO
+from PIL import Image # <--- NUEVO
 
 st.set_page_config(
     page_title="Monitor Financiero Biwenger", page_icon="⚽", layout="wide"
@@ -10,6 +13,8 @@ st.title("⚽ Monitor Financiero Biwenger")
 
 # --- SIDEBAR: Configuración ---
 token = st.sidebar.text_input("Bearer Token", type="password")
+uploaded_file = st.sidebar.file_uploader("📸 Sube captura de Biwenger", type=["png", "jpg", "jpeg"]) # <--- NUEVO
+
 if not token:
   st.info("👈 Pega tu **Bearer Token** en la barra lateral para empezar.")
   st.stop()
@@ -141,6 +146,33 @@ if raw_list:
       if t_val is not None: current_vm_data[uid] = t_val
       extraction_debug_logs.append({"ID": uid, "Usuario": uname})
 
+# --- PROCESAMIENTO OCR (NUEVO) ---
+if uploaded_file is not None:
+    st.write("🔍 Procesando imagen...")
+    try:
+        reader = easyocr.Reader(['es']) # Carga modelo español
+        img = Image.open(uploaded_file)
+        img_np = np.array(img)
+        result = reader.readtext(img_np)
+        
+        # Lógica simplificada: buscamos números altos que parecen valores de equipo
+        # Esto depende de cómo sea tu captura, puede requerir ajuste fino
+        detected_vals = []
+        for (bbox, text, prob) in result:
+            clean_text = text.replace('.', '').replace(',', '')
+            if clean_text.isdigit() and len(clean_text) > 6:
+                detected_vals.append(float(clean_text))
+        
+        # Asignamos a los usuarios encontrados en orden
+        # NOTA: Esta lógica asume que el OCR detecta los valores en el mismo orden que user_names
+        keys = list(user_names.keys())
+        for i, val in enumerate(detected_vals):
+            if i < len(keys):
+                current_vm_data[keys[i]] = val
+        st.success("✅ Valores actualizados desde la imagen.")
+    except Exception as e:
+        st.error(f"Error procesando imagen: {e}")
+
 if not user_names:
   for name, val in DAY_ONE_VALS.items():
     uid = name.replace(" ", "_")
@@ -211,7 +243,7 @@ for uid, name in user_names.items():
 
 if records:
   st.subheader("📊 Monitor Financiero en Directo")
-  st.write("✏️ *Actualiza el 'Valor actual del equipo' de cada mánager.*")
+  st.write("✏️ *Puedes editar el 'Valor actual' o subir una captura para actualizarlo.*")
   
   df_records = pd.DataFrame(records)
   
