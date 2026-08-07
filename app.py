@@ -211,19 +211,23 @@ for uid, name in user_names.items():
 
 if records:
   st.subheader("📊 Monitor Financiero en Directo")
-  st.write("✏️ *Puedes editar únicamente la columna 'Valor actual del equipo'.*")
+  st.write("✏️ *Actualiza el 'Valor actual del equipo' de cada mánager.*")
   
-  df_editor = pd.DataFrame(records)
+  df_records = pd.DataFrame(records)
   
-  # Deshabilitamos la edición en todas las columnas excepto en "Valor actual del equipo"
+  # Tabla superior limpia solo con Usuario y Valor actual del equipo
+  df_editor_input = df_records[["Usuario", "Valor actual del equipo"]].copy()
+  
   edited_df = st.data_editor(
-      df_editor.drop(columns=["UID"]), 
+      df_editor_input, 
       use_container_width=True, 
       hide_index=True,
-      disabled=["Usuario", "Valor de equipo día 1", "Dinero en caja (calculado)", "Balance (ajuste)"]
+      disabled=["Usuario"]
   )
   
-  df_final = edited_df.copy()
+  # Fusionamos los valores actualizados con los cálculos internos
+  df_final = df_records.copy()
+  df_final["Valor actual del equipo"] = edited_df["Valor actual del equipo"].values
   
   df_final["Valor equipo + caja"] = df_final["Valor actual del equipo"] + df_final["Dinero en caja (calculado)"]
   df_final["Puja máxima"] = df_final["Dinero en caja (calculado)"] + ((max_bid_pct / 100.0) * df_final["Valor actual del equipo"])
