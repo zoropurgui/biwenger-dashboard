@@ -1,6 +1,8 @@
 import pandas as pd
 import requests
 import streamlit as st
+import pytesseract
+from PIL import Image
 
 st.set_page_config(
     page_title="Monitor Financiero Biwenger", page_icon="⚽", layout="wide"
@@ -10,6 +12,8 @@ st.title("⚽ Monitor Financiero Biwenger")
 
 # --- SIDEBAR: Configuración ---
 token = st.sidebar.text_input("Bearer Token", type="password")
+uploaded_file = st.sidebar.file_uploader("📸 Sube captura de Biwenger", type=["png", "jpg", "jpeg"])
+
 if not token:
   st.info("👈 Pega tu **Bearer Token** en la barra lateral para empezar.")
   st.stop()
@@ -141,6 +145,31 @@ if raw_list:
       if t_val is not None: current_vm_data[uid] = t_val
       extraction_debug_logs.append({"ID": uid, "Usuario": uname})
 
+# --- PROCESAMIENTO OCR (TESSERACT) ---
+if uploaded_file is not None:
+    st.write("🔍 Leyendo captura con Tesseract...")
+    try:
+        img = Image.open(uploaded_file).convert('L')
+        data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
+        df_ocr = pd.DataFrame(data)
+        df_ocr = df_ocr[df_ocr.conf != -1]
+        
+        known_users = {str(name).lower().strip(): uid for uid, name in user_names.items()}
+        
+        for i in range(len(df_ocr)):
+            text = str(df_ocr.iloc[i]['text']).lower()
+            for u_name, uid in known_users.items():
+                if u_name in text or text in u_name:
+                    row_text = df_ocr[df_ocr['block_num'] == df_ocr.iloc[i]['block_num']]['text'].tolist()
+                    for t in row_text:
+                        clean_t = t.replace('.', '').replace(',', '').replace('€', '').replace('M', '').strip()
+                        if clean_t.isdigit() and len(clean_t) > 6:
+                             current_vm_data[uid] = float(clean_t)
+                             break
+        st.success("✅ Valores actualizados mediante la captura.")
+    except Exception as e:
+        st.error(f"Error procesando la imagen: {e}")
+
 if not user_names:
   for name, val in DAY_ONE_VALS.items():
     uid = name.replace(" ", "_")
@@ -211,7 +240,7 @@ for uid, name in user_names.items():
 
 if records:
   st.subheader("📊 Monitor Financiero en Directo")
-  st.write("✏️ *Actualiza el 'Valor actual del equipo' de cada mánager.*")
+  st.write("✏️ *Actualiza o comprueba el 'Valor actual del equipo' reflejado por la captura.*")
   
   df_records = pd.DataFrame(records)
   
