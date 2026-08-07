@@ -51,96 +51,108 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
     st.rerun()
 
-# --- VALORES DE REFERENCIA / FALLBACK DE SEGURIDAD ---
-DAY_ONE_VALS = {
-    "athletik81": 21600000.0, "ring014": 21580000.0, "tubu": 21570000.0, 
-    "marroba": 21410000.0, "zhukkov": 21240000.0, "nitwolf": 21550000.0, 
-    "yoqsetio xdxd": 21870000.0, "nistalikus": 21550000.0, "moltisanti": 21540000.0, 
-    "gran gravessen": 21540000.0, "zoropurgui": 21530000.0, "_caesar_": 21510000.0, 
-    "nitrorx": 21490000.0
-}
-
-# --- EXTRACCIÓN BLINDADA Y ROBUSTA ---
+# --- EXTRACCIÓN AVANZADA: EQUIPO Y CAJA DIRECTOS DE LA API ---
 league_data = league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
 
-raw_list = []
-for key_name in ["standings", "users", "members"]:
-    val = league_data.get(key_name)
-    if isinstance(val, list) and len(val) > 0:
-        raw_list = val
-        break
-    elif isinstance(val, dict) and len(val) > 0:
-        raw_list = list(val.values())
-        break
+raw_users = league_data.get("users", [])
+raw_standings = league_data.get("standings", [])
+
+user_info_map = {}
+
+# 1. Cargar datos de usuarios (contienen el balance / caja real)
+if isinstance(raw_users, list):
+    for u in raw_users:
+        if isinstance(u, dict):
+            uid = u.get("id")
+            if uid is not None:
+                user_info_map[str(uid)] = dict(u)
+
+# 2. Combinar con standings (contienen el teamValue real)
+if isinstance(raw_standings, list):
+    for s in raw_standings:
+        if isinstance(s, dict):
+            uid = s.get("id")
+            if uid is None and isinstance(s.get("user"), dict):
+                uid = s.get("user").get("id")
+            if uid is not None:
+                uid_str = str(uid)
+                if uid_str not in user_info_map:
+                    user_info_map[uid_str] = dict(s)
+                else:
+                    user_info_map[uid_str].update(s)
 
 user_names = {}
 vm_data = {}
 api_balance_data = {}
 extraction_debug_logs = []
 
-if raw_list:
-    for item in raw_list:
-        if not isinstance(item, dict): continue
+for uid_str, u in user_info_map.items():
+    uname = u.get("name") or u.get("username")
+    if not uname and isinstance(u.get("user"), dict):
+        uname = u.get("user").get("name") or u.get("user").get("username")
+    
+    if uname:
+        user_names[uid_str] = uname
         
-        uid = item.get("id")
-        uname = item.get("name") or item.get("username")
-        
-        if uid is None and isinstance(item.get("user"), dict):
-            uid = item.get("user").get("id")
-            uname = item.get("user").get("name") or item.get("user").get("username")
-            
-        if uid is None and uname is not None:
-            uid = str(uname).lower().strip()
-        elif uid is not None:
-            uid = str(uid)
-            
-        if uid and uname:
-            user_names[uid] = uname
-            
-            # Buscar teamValue de forma exhaustiva
-            t_val = None
-            for k in ["teamValue", "value", "marketValue", "price", "team_value"]:
-                if k in item and item[k] is not None:
-                    try:
-                        val = float(item[k])
-                        if val > 0:
-                            t_val = val
-                            break
-                    except:
-                        pass
-            
-            if t_val is not None:
-                vm_data[uid] = t_val
-                
-            extraction_debug_logs.append({
-                "ID": uid,
-                "Usuario": uname,
-                "teamValue_extraido": t_val if t_val else "NO ENCONTRADO",
-                "Keys disponibles": list(item.keys())
-            })
+    # Extraer Team Value
+    t_val = None
+    for k in ["teamValue", "value", "marketValue", "price"]:
+        if k in u and u[k] is not None:
+            try:
+                val = float(u[k])
+                if val > 0:
+                    t_val = val
+                    break
+            except:
+                pass
+    if t_val is not None:
+        vm_data[uid_str] = t_val
 
-# GARANTÍA ABSOLUTA: Si por lo que sea no se cargó ningún usuario de la API, usamos el mapa completo
-if not user_names:
-    for name, val in DAY_ONE_VALS.items():
-        uid = name.replace(" ", "_")
-        user_names[uid] = name.title()
-        if uid not in vm_data:
-            vm_data[uid] = val
-
-# Asegurar que ningún usuario de DAY_ONE_VALS se quede sin valor actual
-for uid, name in list(user_names.items()):
-    if uid not in vm_data or vm_data[uid] == 0.0:
-        # Buscar por nombre en minúsculas si el ID no coincide
-        match_val = None
-        for d_name, d_val in DAY_ONE_VALS.items():
-            if d_name in str(name).lower():
-                match_val = d_val
+    # Extraer Balance / Caja Real de la API
+    b_val = None
+    for b_key in ["balance", "money", "cash", "budget"]:
+        if b_key in u and u[b_key] is not None:
+            try:
+                b_val = float(u[b_key])
                 break
-        vm_data[uid] = match_val if match_val else 21500000.0
+            except:
+                pass
+    if b_val is None:
+        for sub in ["account", "team", "user"]:
+            sub_obj = u.get(sub)
+            if isinstance(sub_obj, dict):
+                for b_key in ["balance", "money", "cash"]:
+                    if b_key in sub_obj and sub_obj[b_key] is not None:
+                        try:
+                            b_val = float(sub_obj[b_key])
+                            break
+                        except:
+                            pass
+            if b_val is not None:
+                break
+                
+    if b_val is not None:
+        api_balance_data[uid_str] = b_val
+
+    extraction_debug_logs.append({
+        "ID": uid_str,
+        "Usuario": uname,
+        "teamValue": t_val if t_val else "NO",
+        "balance_api": b_val if b_val is not None else "NO"
+    })
+
+# Fallback por seguridad si algún dato viniera vacío
+DAY_ONE_VALS = {
+    "marroba": 21560000.0, "ring014": 21580000.0, "athletik81": 21600000.0, 
+    "tubu": 21570000.0, "zhukkov": 21240000.0, "nitwolf": 21550000.0, 
+    "yoqsetio xdxd": 21870000.0, "nistalikus": 21550000.0, "moltisanti": 21540000.0, 
+    "gran gravessen": 21540000.0, "zoropurgui": 21530000.0, "_caesar_": 21510000.0, 
+    "nitrorx": 21490000.0
+}
 
 user_adjustments = {uid: 0.0 for uid in user_names.keys()}
 
-# --- PROCESAR TRANSFERENCIAS Y TABLÓN ---
+# --- PROCESAR TRANSFERENCIAS Y TABLÓN (Ajustes recientes si procede) ---
 detected_events_log = []
 
 def add_money(uid, amt, desc):
@@ -190,18 +202,13 @@ records = []
 for uid, name in user_names.items():
     v_actual = vm_data.get(uid, 21500000.0)
     
+    # Priorizar caja directa de la API; si no estuviera disponible, usar estimación por defecto
     if uid in api_balance_data:
-        saldo_real = api_balance_data[uid] + user_adjustments.get(uid, 0.0)
+        saldo_real = api_balance_data[uid]
     else:
-        # Calcular saldo inicial estimado basándose en el valor de día uno
-        d_val = None
-        for d_key, d_v in DAY_ONE_VALS.items():
-            if d_key in str(name).lower():
-                d_val = d_v
-                break
-        v_inicial = d_val if d_val else 21500000.0
+        d_val = DAY_ONE_VALS.get(str(name).lower(), 21500000.0)
         ajuste = user_adjustments.get(uid, 0.0)
-        saldo_real = (INITIAL_TOTAL - v_inicial) + ajuste
+        saldo_real = (INITIAL_TOTAL - d_val) + ajuste
         
     valor_total_caja = v_actual + saldo_real
     puja_max = saldo_real + ((max_bid_pct / 100.0) * v_actual)
@@ -234,14 +241,13 @@ else:
     st.info("ℹ️ No se han detectado movimientos recientes.")
 
 # --- DIAGNÓSTICO ---
-with st.expander("🔍 Diagnóstico: Extracción Blindada", expanded=False):
-    st.markdown("Comprueba aquí los valores extraídos y el origen de los datos.")
+with st.expander("🔍 Diagnóstico de Extracción (API Balance vs VM)", expanded=False):
+    st.markdown("Verifica que los valores de caja y valor de equipo coinciden exactamente con los de la app de Biwenger.")
     if extraction_debug_logs:
         df_debug = pd.DataFrame(extraction_debug_logs)
-        df_debug["Keys disponibles"] = df_debug["Keys disponibles"].apply(lambda x: ", ".join(str(k) for k in x) if isinstance(x, list) else str(x))
         st.dataframe(df_debug, use_container_width=True, hide_index=True)
     else:
-        st.write("Se han utilizado los valores por defecto del sistema por seguridad.")
+        st.write("No hay registros de depuración.")
 
 with st.expander("🛠️ Panel de Diagnóstico (Ver Respuesta Bruta de la Liga)"):
     st.json(league_resp)
