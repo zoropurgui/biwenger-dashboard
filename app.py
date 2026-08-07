@@ -4,7 +4,7 @@ import requests
 
 st.set_page_config(page_title="Biwenger Financial Monitor Pro", page_icon="⚽", layout="wide")
 
-st.title("⚽ Monitor Financiero Biwenger (Definitivo Corregido)")
+st.title("⚽ Monitor Financiero Biwenger (Definitivo)")
 
 # --- SIDEBAR: Configuración ---
 st.sidebar.header("🔑 Conexión")
@@ -45,7 +45,7 @@ selected_league = st.sidebar.selectbox("🏆 Liga", list(league_dict.keys()))
 l_id, u_id = league_dict[selected_league]
 
 st.sidebar.header("⚙️ Ajustes")
-max_bid_pct = st.sidebar.slider("Crédito Valor Equipo (%)", 0, 100, 25)
+max_bid_pct = st.sidebar.slider("Porcentaje Valor Equipo para Puja (%)", 0, 100, 25)
 
 if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
@@ -56,7 +56,6 @@ headers = {"Authorization": f"Bearer {clean_token}", "X-League": str(l_id), "X-U
 
 @st.cache_data(ttl=5)
 def get_all_data(league_id):
-    # ¡AQUÍ ESTABA EL FALLO! Las URLs ahora incluyen el ID de la liga en el path
     url_league = f"https://biwenger.as.com/api/v2/league/{league_id}"
     url_transfers = f"https://biwenger.as.com/api/v2/league/{league_id}/transfers?limit=50"
     url_board = f"https://biwenger.as.com/api/v2/league/{league_id}/board?limit=50"
@@ -139,19 +138,21 @@ for u in users_data:
     v_inicial = DAY_ONE_VALS.get(name, 21500000.0)
     ajuste = user_adjustments.get(u_id, 0.0)
     
-    saldo_real = (INITIAL_TOTAL - v_inicial) + ajuste
-    v_actual = float(u.get("teamValue", 0) or 0)
-    puja_max = saldo_real + ((max_bid_pct / 100.0) * v_actual)
+    dinero_caja = (INITIAL_TOTAL - v_inicial) + ajuste
+    valor_equipo = float(u.get("teamValue", 0) or 0)
+    valor_total = dinero_caja + valor_equipo
+    puja_max = dinero_caja + ((max_bid_pct / 100.0) * valor_equipo)
     
     records.append({
         "Usuario": u.get("name"),
-        "💸 Saldo Real en Caja": saldo_real,
-        "🔄 Ajuste Detectado": ajuste,
-        "🔥 Puja Máxima Real": puja_max
+        "Valor del equipo": valor_equipo,
+        "Dinero en caja": dinero_caja,
+        "Valor del equipo + dinero en caja": valor_total,
+        "Puja máxima": puja_max
     })
 
-df = pd.DataFrame(records).sort_values("💸 Saldo Real en Caja", ascending=False)
-for col in ["💸 Saldo Real en Caja", "🔄 Ajuste Detectado", "🔥 Puja Máxima Real"]:
+df = pd.DataFrame(records).sort_values("Dinero en caja", ascending=False)
+for col in ["Valor del equipo", "Dinero en caja", "Valor del equipo + dinero en caja", "Puja máxima"]:
     df[col] = df[col].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
 
 st.subheader("📊 Monitor Financiero en Directo")
