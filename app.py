@@ -2,21 +2,18 @@ import streamlit as st
 import pandas as pd
 import requests
 
-st.set_page_config(page_title="Biwenger Financial Monitor Pro", page_icon="⚽", layout="wide")
+st.set_page_config(page_title="Monitor Financiero Biwenger", page_icon="⚽", layout="wide")
 
-st.title("⚽ Monitor Financiero Biwenger (Definitivo)")
+st.title("⚽ Monitor Financiero Biwenger")
 
 # --- SIDEBAR: Configuración ---
-st.sidebar.header("🔑 Conexión")
 token = st.sidebar.text_input("Bearer Token", type="password")
 
 if not token:
     st.info("👈 Pega tu **Bearer Token** en la barra lateral para empezar.")
     st.stop()
 
-clean_token = token.strip()
-if clean_token.lower().startswith("bearer "):
-    clean_token = clean_token[7:].strip()
+clean_token = token.strip().replace("Bearer ", "").strip()
 
 # --- DATOS DE REFERENCIA (DÍA 1) ---
 DAY_ONE_VALS = {
@@ -29,7 +26,7 @@ DAY_ONE_VALS = {
 INITIAL_TOTAL = 40000000.0
 
 @st.cache_data(ttl=30)
-def fetch_all_biwenger_data(t):
+def load_data(t):
     h = {"Authorization": f"Bearer {t}", "X-App-Version": "2.0.0"}
     try:
         acc = requests.get("https://biwenger.as.com/api/v2/account", headers=h, timeout=8).json()
@@ -37,61 +34,82 @@ def fetch_all_biwenger_data(t):
         if not leagues: return None, None, {}, {}, {}, {}
         
         l = leagues[0]
-        l_id, u_id = l.get("id"), l.get("user", {}).get("id")
-        h.update({"X-League": str(l_id), "X-User": str(u_id)})
+        l_id = l.get("id")
+        u_id = l.get("user", {}).get("id")
         
-        r_league = requests.get(f"https://biwenger.as.com/api/v2/league/{l_id}", headers=h).json()
-        r_squads = requests.get(f"https://biwenger.as.com/api/v2/league/{l_id}/squads", headers=h).json()
-        r_transfers = requests.get(f"https://biwenger.as.com/api/v2/league/{l_id}/transfers?limit=50", headers=h).json()
-        r_board = requests.get(f"https://biwenger.as.com/api/v2/league/{l_id}/board?limit=50", headers=h).json()
+        h_league = h.copy()
+        h_league.update({"X-League": str(l_id), "X-User": str(u_id)})
+        
+        r_league = requests.get(f"https://biwenger.as.com/api/v2/league/{l_id}", headers=h_league).json()
+        r_squads = requests.get(f"https://biwenger.as.com/api/v2/league/{l_id}/squads", headers=h_league).json()
+        r_transfers = requests.get(f"https://biwenger.as.com/api/v2/league/{l_id}/transfers?limit=50", headers=h_league).json()
+        r_board = requests.get(f"https://biwenger.as.com/api/v2/league/{l_id}/board?limit=50", headers=h_league).json()
         
         return l_id, u_id, r_league, r_squads, r_transfers, r_board
-    except Exception:
-        return None, None, {}, {}, {}, {}
+    except Exception as e:
+        return None, None, {"error": str(e)}, {}, {}, {}
 
-l_id, u_id, league_resp, squads_resp, transfers_resp, board_resp = fetch_all_biwenger_data(clean_token)
+l_id, u_id, league_resp, squads_resp, transfers_resp, board_resp = load_data(clean_token)
 
 if not l_id:
-    st.error("❌ Error de conexión o token inválido.")
+    st.error("❌ Error al conectar con la API de Biwenger. Comprueba tu token.")
     st.stop()
 
-st.sidebar.header("⚙️ Ajustes")
 max_bid_pct = st.sidebar.slider("Crédito Valor Equipo (%)", 0, 100, 25)
-
 if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
     st.rerun()
 
-# Extraer usuarios
 league_data = league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
 users_list = league_data.get("users", [])
-
-if not users_list:
-    users_list = [{"id": i, "name": name.title()} for i, name in enumerate(DAY_ONE_VALS.keys())]
 
 user_adjustments = {}
 user_names = {}
 for u in users_list:
     if isinstance(u, dict):
-        u_id = u.get("id")
-        u_name = u.get("name", "Desconocido")
-        if u_id:
-            user_adjustments[u_id] = 0.0
-            user_names[u_id] = u_name
+        uid = u.get("id")
+        uname = u.get("name", "Desconocido")
+        if uid:
+            user_adjustments[uid] = 0.0
+            user_names[uid] = uname
 
+# Extracción robusta del Valor de Mercado (VM) desde squads
+vm_data = {}
+squads_data = squads_resp.get("data", {})
+
+if isinstance(squads_data, dict):
+    for uid_str, squad in squads_data.items():
+        try:
+            uid = int(uid_str)
+            total_vm = float(squad.get("value", 0) or squad.get("teamValue", 0) or 0)
+            if total_vm == 0 and isinstance(squad.get("players"), list):
+                total_vm = sum(float(p.get("price", 0) or p.get("marketValue", 0) or 0) for p in squad["players"])
+            vm_data[uid] = total_vm
+        except Exception:
+            pass
+elif isinstance(squads_data, list):
+    for item in squads_data:
+        if isinstance(item, dict):
+            uid = item.get("user") or item.get("id")
+            total_vm = float(item.get("value", 0) or item.get("teamValue", 0) or 0)
+            if total_vm == 0 and isinstance(item.get("players"), list):
+                total_vm = sum(float(p.get("price", 0) or p.get("marketValue", 0) or 0) for p in item["players"])
+            if uid:
+                vm_data[int(uid)] = total_vm
+
+# Procesar transferencias y tablón
 detected_events_log = []
 
-def add_money(user_id, amount, desc):
-    if user_id in user_adjustments and amount > 0:
-        user_adjustments[user_id] += amount
-        detected_events_log.append({"Usuario": user_names.get(user_id, str(user_id)), "Importe (€)": amount, "Descripción": desc})
+def add_money(uid, amt, desc):
+    if uid in user_adjustments and amt > 0:
+        user_adjustments[uid] += amt
+        detected_events_log.append({"Usuario": user_names.get(uid, str(uid)), "Importe (€)": amt, "Descripción": desc})
 
-def sub_money(user_id, amount, desc):
-    if user_id in user_adjustments and amount > 0:
-        user_adjustments[user_id] -= amount
-        detected_events_log.append({"Usuario": user_names.get(user_id, str(user_id)), "Importe (€)": -amount, "Descripción": desc})
+def sub_money(uid, amt, desc):
+    if uid in user_adjustments and amt > 0:
+        user_adjustments[uid] -= amt
+        detected_events_log.append({"Usuario": user_names.get(uid, str(uid)), "Importe (€)": -amt, "Descripción": desc})
 
-# Procesar transferencias formales
 transfers = transfers_resp.get("data", []) if isinstance(transfers_resp, dict) else []
 if isinstance(transfers, list):
     for t in transfers:
@@ -103,7 +121,6 @@ if isinstance(transfers, list):
         if s: add_money(int(s), amt, "Venta de Jugador")
         if b: sub_money(int(b), amt, "Compra de Jugador")
 
-# Procesar Tablón de anuncios
 board = board_resp.get("data", []) if isinstance(board_resp, dict) else []
 if isinstance(board, list):
     for item in board:
@@ -123,33 +140,12 @@ if isinstance(board, list):
                 add_money(int(s_id), amt, "Venta entre mánagers")
                 sub_money(int(b_id), amt, "Compra entre mánagers")
 
-# Extracción del Valor de Mercado (VM) desde squads
-vm_data = {}
-squads_data = squads_resp.get("data", {}) if isinstance(squads_resp, dict) else {}
-
-if isinstance(squads_data, dict):
-    for u_id_str, squad in squads_data.items():
-        try:
-            u_id = int(u_id_str)
-            # Intentar leer el valor total directamente del squad o sumando sus jugadores
-            tv = float(squad.get("value", 0) or squad.get("teamValue", 0) or 0)
-            if tv == 0 and isinstance(squad.get("players"), list):
-                tv = sum(float(p.get("price", 0) or p.get("marketValue", 0) or 0) for p in squad["players"])
-            vm_data[u_id] = tv
-        except Exception:
-            pass
-
-# --- CONSTRUCCIÓN DE LA TABLA FINANCIERA ---
+# Construcción de la tabla financiera
 records = []
-for u in users_list:
-    if not isinstance(u, dict): continue
-    u_id = u.get("id")
-    name = str(u.get("name", "Desconocido"))
-    name_lower = name.lower()
-    
-    v_actual = vm_data.get(u_id, 0.0)
-    v_inicial = DAY_ONE_VALS.get(name_lower, 21500000.0)
-    ajuste = user_adjustments.get(u_id, 0.0)
+for uid, name in user_names.items():
+    v_actual = vm_data.get(uid, 0.0)
+    v_inicial = DAY_ONE_VALS.get(str(name).lower(), 21500000.0)
+    ajuste = user_adjustments.get(uid, 0.0)
     
     saldo_real = (INITIAL_TOTAL - v_inicial) + ajuste
     valor_total_caja = v_actual + saldo_real
@@ -173,7 +169,6 @@ if records:
 else:
     st.warning("⚠️ No hay datos para mostrar en la tabla.")
 
-# --- HISTORIAL DE TRASPASOS Y MOVIMIENTOS ---
 st.markdown("---")
 st.subheader("📜 Historial de Traspasos y Movimientos Detectados")
 if detected_events_log:
@@ -181,9 +176,7 @@ if detected_events_log:
     df_log["Importe (€)"] = df_log["Importe (€)"].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
     st.dataframe(df_log, use_container_width=True, hide_index=True)
 else:
-    st.info("ℹ️ No se han detectado movimientos recientes en transferencias o tablón.")
+    st.info("ℹ️ No se han detectado movimientos recientes.")
 
-# --- PANEL DE DIAGNÓSTICO TÉCNICO ---
-with st.expander("🛠️ Panel de Diagnóstico Técnico (Ver respuesta de Squads)"):
-    st.write("**Squads Response:**")
+with st.expander("🛠️ Panel de Diagnóstico (Ver estructura de Squads)"):
     st.json(squads_resp)
