@@ -59,68 +59,27 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
     st.rerun()
 
-# --- EXTRACCIÓN GLOBAL Y RECURSIVA DEFINITIVA DEL VALOR DE EQUIPO ---
+# --- EXTRACCIÓN DIRECTA DESDE 'standings' (JSON OFICIAL) ---
+league_data = league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
+standings_list = league_data.get("standings", [])
+
+user_adjustments = {}
 user_names = {}
 vm_data = {}
 
-def extract_from_node(node):
-    if isinstance(node, dict):
-        uid = node.get("id") or node.get("user") or node.get("userId")
-        if isinstance(uid, dict):
-            uid = uid.get("id")
+if isinstance(standings_list, list) and len(standings_list) > 0:
+    for s in standings_list:
+        if not isinstance(s, dict):
+            continue
+        uid = str(s.get("id"))
+        uname = s.get("name", f"Usuario {uid}")
+        team_val = float(s.get("teamValue", 0) or 0)
         
-        uname = node.get("name") or node.get("username") or node.get("slug")
-        
-        val = None
-        for k in ["value", "teamValue", "marketValue", "team_value"]:
-            if k in node and node[k] is not None:
-                try:
-                    v = float(node[k])
-                    if v > 100000:
-                        val = v
-                        break
-                except:
-                    pass
-        
-        if val is None:
-            for sub in ["team", "account", "profile"]:
-                sub_obj = node.get(sub)
-                if isinstance(sub_obj, dict):
-                    for k in ["value", "teamValue", "marketValue", "price"]:
-                        if k in sub_obj and sub_obj[k] is not None:
-                            try:
-                                v = float(sub_obj[k])
-                                if v > 100000:
-                                    val = v
-                                    break
-                            except:
-                                pass
-                    if val is not None:
-                        break
-
-        if uid is not None:
-            uid_str = str(uid)
-            if uname and (uid_str not in user_names or len(str(user_names[uid_str])) < len(str(uname))):
-                user_names[uid_str] = uname
-            if val is not None and val > 100000:
-                vm_data[uid_str] = val
-
-        for v in node.values():
-            extract_from_node(v)
-    elif isinstance(node, list):
-        for item in node:
-            extract_from_node(item)
-
-extract_from_node(league_resp)
-
-user_adjustments = {}
-for uid in user_names.keys():
-    user_adjustments[uid] = 0.0
-    if uid not in vm_data or vm_data[uid] == 0.0:
-        uname = user_names[uid]
-        vm_data[uid] = DAY_ONE_VALS.get(str(uname).lower(), 21500000.0)
-
-if not user_names:
+        user_adjustments[uid] = 0.0
+        user_names[uid] = uname
+        vm_data[uid] = team_val
+else:
+    # Respaldo por seguridad si no viniera en standings
     for idx, (name_key, def_val) in enumerate(DAY_ONE_VALS.items()):
         uid = str(1000 + idx)
         user_adjustments[uid] = 0.0
@@ -210,5 +169,5 @@ if detected_events_log:
 else:
     st.info("ℹ️ No se han detectado movimientos recientes.")
 
-with st.expander("🛠️ Panel de Diagnóstico (Ver Respuesta Bruta de la Liga)"):
-    st.json(league_resp)
+with st.expander("🛠️ Panel de Diagnóstico (Ver Standings Extraídos)"):
+    st.json(standings_list)
