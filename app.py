@@ -1,5 +1,5 @@
-import requests
 import pandas as pd
+import requests
 import streamlit as st
 
 st.set_page_config(
@@ -67,7 +67,7 @@ if st.sidebar.button("🔄 Recargar Datos"):
   st.cache_data.clear()
   st.rerun()
 
-# --- VALORES DE REFERENCIA / FALLBACK DE SEGURIDAD ---
+# --- VALORES DE REFERENCIA / DÍA 1 (Para calcular el saldo inicial en caja) ---
 DAY_ONE_VALS = {
     "athletik81": 21600000.0,
     "ring014": 21580000.0,
@@ -84,7 +84,7 @@ DAY_ONE_VALS = {
     "nitrorx": 21490000.0,
 }
 
-# --- EXTRACCIÓN BLINDADA Y ROBUSTA ---
+# --- EXTRACCIÓN DE DATOS DE LA LIGA ---
 league_data = league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
 
 raw_list = []
@@ -122,25 +122,43 @@ if raw_list:
     if uid and uname:
       user_names[uid] = uname
 
-      # Buscar teamValue de forma exhaustiva (incluyendo objetos anidados)
+      # Búsqueda exhaustiva del valor actual del equipo en la API
       t_val = None
-      # 1. Búsqueda en claves directas
-      for k in ["teamValue", "value", "marketValue", "price", "team_value"]:
-        if k in item and item[k] is not None:
-          try:
-            val = float(item[k])
-            if val > 0:
-              t_val = val
-              break
-          except:
-            pass
+      search_keys = [
+          "teamValue",
+          "value",
+          "marketValue",
+          "price",
+          "team_value",
+          "team",
+      ]
 
-      # 2. Búsqueda en subdiccionarios si no se encontró arriba
+      # 1. Buscar en propiedades directas
+      for k in search_keys:
+        if k in item and item[k] is not None:
+          val_candidate = item[k]
+          if isinstance(val_candidate, (int, float)) and val_candidate > 0:
+            t_val = float(val_candidate)
+            break
+          elif isinstance(val_candidate, dict):
+            # Si el valor está dentro de un objeto como 'team'
+            for sub_k in ["value", "marketValue", "price", "teamValue"]:
+              if (
+                  sub_k in val_candidate
+                  and val_candidate[sub_k] is not None
+                  and float(val_candidate[sub_k]) > 0
+              ):
+                t_val = float(val_candidate[sub_k])
+                break
+          if t_val is not None:
+            break
+
+      # 2. Si no se halló, buscar en subdiccionarios comunes
       if t_val is None:
-        for sub_key in ["team", "account", "user", "data"]:
+        for sub_key in ["account", "user", "data"]:
           sub_obj = item.get(sub_key)
           if isinstance(sub_obj, dict):
-            for k in ["teamValue", "value", "marketValue", "price", "team_value"]:
+            for k in search_keys:
               if k in sub_obj and sub_obj[k] is not None:
                 try:
                   val = float(sub_obj[k])
@@ -162,15 +180,7 @@ if raw_list:
           "Keys disponibles": list(item.keys()),
       })
 
-# GARANTÍA ABSOLUTA: Si por lo que sea no se cargó ningún usuario de la API, usamos el mapa completo
-if not user_names:
-  for name, val in DAY_ONE_VALS.items():
-    uid = name.replace(" ", "_")
-    user_names[uid] = name.title()
-    if uid not in vm_data:
-      vm_data[uid] = val
-
-# Asegurar que ningún usuario se quede sin valor actual
+# Si algún usuario no se detectó en la API, aseguramos su nombre y valor por defecto
 for uid, name in list(user_names.items()):
   if uid not in vm_data or vm_data[uid] == 0.0:
     match_val = None
