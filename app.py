@@ -198,7 +198,6 @@ for uid, name in user_names.items():
   v_actual = current_vm_data.get(uid, v_inicial)
   ajuste = user_adjustments.get(uid, 0.0)
   
-  # AQUI ESTÁ LA CORRECCIÓN: Usamos "+" para el ajuste
   saldo_real = (INITIAL_TOTAL - v_inicial) + ajuste
   
   records.append({
@@ -212,10 +211,17 @@ for uid, name in user_names.items():
 
 if records:
   st.subheader("📊 Monitor Financiero en Directo")
-  st.write("✏️ *Edita el valor en la columna 'Valor actual del equipo' y pulsa Enter.*")
+  st.write("✏️ *Puedes editar únicamente la columna 'Valor actual del equipo'.*")
   
   df_editor = pd.DataFrame(records)
-  edited_df = st.data_editor(df_editor.drop(columns=["UID"]), use_container_width=True, hide_index=True)
+  
+  # Deshabilitamos la edición en todas las columnas excepto en "Valor actual del equipo"
+  edited_df = st.data_editor(
+      df_editor.drop(columns=["UID"]), 
+      use_container_width=True, 
+      hide_index=True,
+      disabled=["Usuario", "Valor de equipo día 1", "Dinero en caja (calculado)", "Balance (ajuste)"]
+  )
   
   df_final = edited_df.copy()
   
