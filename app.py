@@ -59,27 +59,67 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
     st.rerun()
 
-# --- EXTRACCIÓN DIRECTA DESDE 'standings' (JSON OFICIAL) ---
-league_data = league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
-standings = league_data.get("standings", [])
-
+# --- EXTRACCIÓN GLOBAL Y RECURSIVA DEFINITIVA DEL VALOR DE EQUIPO ---
 user_names = {}
 vm_data = {}
+
+def extract_from_node(node):
+    if isinstance(node, dict):
+        uid = node.get("id") or node.get("user") or node.get("userId")
+        if isinstance(uid, dict):
+            uid = uid.get("id")
+        
+        uname = node.get("name") or node.get("username") or node.get("slug")
+        
+        val = None
+        for k in ["value", "teamValue", "marketValue", "team_value"]:
+            if k in node and node[k] is not None:
+                try:
+                    v = float(node[k])
+                    if v > 100000:
+                        val = v
+                        break
+                except:
+                    pass
+        
+        if val is None:
+            for sub in ["team", "account", "profile"]:
+                sub_obj = node.get(sub)
+                if isinstance(sub_obj, dict):
+                    for k in ["value", "teamValue", "marketValue", "price"]:
+                        if k in sub_obj and sub_obj[k] is not None:
+                            try:
+                                v = float(sub_obj[k])
+                                if v > 100000:
+                                    val = v
+                                    break
+                            except:
+                                pass
+                    if val is not None:
+                        break
+
+        if uid is not None:
+            uid_str = str(uid)
+            if uname and (uid_str not in user_names or len(str(user_names[uid_str])) < len(str(uname))):
+                user_names[uid_str] = uname
+            if val is not None and val > 100000:
+                vm_data[uid_str] = val
+
+        for v in node.values():
+            extract_from_node(v)
+    elif isinstance(node, list):
+        for item in node:
+            extract_from_node(item)
+
+extract_from_node(league_resp)
+
 user_adjustments = {}
+for uid in user_names.keys():
+    user_adjustments[uid] = 0.0
+    if uid not in vm_data or vm_data[uid] == 0.0:
+        uname = user_names[uid]
+        vm_data[uid] = DAY_ONE_VALS.get(str(uname).lower(), 21500000.0)
 
-if isinstance(standings, list):
-    for s in standings:
-        if isinstance(s, dict):
-            uid = s.get("id")
-            name = s.get("name")
-            team_value = s.get("teamValue")
-            if uid is not None and name:
-                uid_str = str(uid)
-                user_names[uid_str] = name
-                vm_data[uid_str] = float(team_value) if team_value is not None else DAY_ONE_VALS.get(name.lower(), 21500000.0)
-                user_adjustments[uid_str] = 0.0
-
-# Respaldo por seguridad si standings estuviera vacío
 if not user_names:
     for idx, (name_key, def_val) in enumerate(DAY_ONE_VALS.items()):
         uid = str(1000 + idx)
@@ -87,7 +127,7 @@ if not user_names:
         user_names[uid] = name_key.title()
         vm_data[uid] = def_val
 
-# --- PROCESAR TRANSFERENCIAS Y TABLÓN ---
+# --- PROCESAR TRANSFERENCIAS Y TABLÓN (LÓGICA INTACTA Y FUNCIONAL) ---
 detected_events_log = []
 
 def add_money(uid, amt, desc):
@@ -170,5 +210,5 @@ if detected_events_log:
 else:
     st.info("ℹ️ No se han detectado movimientos recientes.")
 
-with st.expander("🛠️ Panel de Diagnóstico (Ver Standings)"):
-    st.json(standings)
+with st.expander("🛠️ Panel de Diagnóstico (Ver Respuesta Bruta de la Liga)"):
+    st.json(league_resp)
