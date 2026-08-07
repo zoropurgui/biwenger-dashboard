@@ -15,14 +15,6 @@ if not token:
 
 clean_token = token.strip().replace("Bearer ", "").strip()
 
-# --- DATOS DE REFERENCIA (DÍA 1) ---
-DAY_ONE_VALS = {
-    "athletik81": 21600000.0, "ring014": 21580000.0, "tubu": 21570000.0, 
-    "marroba": 21560000.0, "zhukkov": 21560000.0, "nitwolf": 21550000.0, 
-    "yoqsetio xdxd": 21550000.0, "nistalikus": 21550000.0, "moltisanti": 21540000.0, 
-    "gran gravessen": 21540000.0, "zoropurgui": 21530000.0, "_caesar_": 21510000.0, 
-    "nitrorx": 21490000.0
-}
 INITIAL_TOTAL = 40000000.0
 
 @st.cache_data(ttl=30)
@@ -59,102 +51,104 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
     st.rerun()
 
-# --- EXTRACCIÓN ROBUSTA Y MULTINIVEL DE VALORES DE EQUIPO ---
+# --- EXTRACCIÓN AVANZADA Y DIRECTA DE VALORES REALES DE LA API ---
 user_names = {}
 vm_data = {}
+api_balance_data = {}
 
 league_data = league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
 
-# 1. Buscar en el array de usuarios ('users')
-users_list = league_data.get("users", [])
-if isinstance(users_list, list):
-    for u in users_list:
-        if isinstance(u, dict):
-            uid = u.get("id")
-            uname = u.get("name")
-            team_val = u.get("teamValue") or u.get("value") or u.get("marketValue")
-            if uid is not None and uname:
-                uid_str = str(uid)
-                user_names[uid_str] = uname
-                if team_val is not None:
-                    try:
-                        v = float(team_val)
-                        if v > 0:
-                            vm_data[uid_str] = v
-                    except:
-                        pass
-
-# 2. Buscar en la clasificación ('standings') por si estuviera ahí estructurado de otra forma
-standings_list = league_data.get("standings", [])
-if isinstance(standings_list, list):
-    for s in standings_list:
-        if isinstance(s, dict):
-            uid = s.get("id") or s.get("user")
-            if isinstance(uid, dict):
-                uid = uid.get("id")
-            uname = s.get("name") or s.get("username")
-            team_val = s.get("teamValue") or s.get("value") or s.get("marketValue")
-            if uid is not None:
-                uid_str = str(uid)
-                if uname and uid_str not in user_names:
-                    user_names[uid_str] = uname
-                if team_val is not None:
-                    try:
-                        v = float(team_val)
-                        if v > 0:
-                            vm_data[uid_str] = v
-                    except:
-                        pass
-
-# 3. Búsqueda recursiva profunda como red de seguridad para cualquier nodo faltante
-def deep_extract(node):
-    if isinstance(node, dict):
-        uid = node.get("id") or node.get("user") or node.get("userId")
+def parse_entity_list(entity_list):
+    if not isinstance(entity_list, list):
+        return
+    for item in entity_list:
+        if not isinstance(item, dict):
+            continue
+        uid = item.get("id") or item.get("user") or item.get("userId")
         if isinstance(uid, dict):
             uid = uid.get("id")
-        uname = node.get("name") or node.get("username") or node.get("slug")
         
-        val = None
+        uname = item.get("name") or item.get("username") or item.get("slug")
+        
+        # Búsqueda exhaustiva del Valor de Equipo real
+        t_val = None
         for k in ["teamValue", "value", "marketValue", "team_value"]:
-            if k in node and node[k] is not None:
+            if k in item and item[k] is not None:
                 try:
-                    v = float(node[k])
-                    if v > 100000:
-                        val = v
+                    v = float(item[k])
+                    if v > 0:
+                        t_val = v
                         break
                 except:
                     pass
         
+        if t_val is None:
+            for sub in ["team", "account", "profile"]:
+                sub_obj = item.get(sub)
+                if isinstance(sub_obj, dict):
+                    for k in ["value", "teamValue", "marketValue", "price"]:
+                        if k in sub_obj and sub_obj[k] is not None:
+                            try:
+                                v = float(sub_obj[k])
+                                if v > 0:
+                                    t_val = v
+                                    break
+                            except:
+                                pass
+                    if t_val is not None:
+                        break
+
+        # Búsqueda de saldo/dinero directo si lo provee la API
+        b_val = None
+        for k in ["balance", "money", "cash"]:
+            if k in item and item[k] is not None:
+                try:
+                    b_val = float(item[k])
+                    break
+                except:
+                    pass
+
         if uid is not None:
             uid_str = str(uid)
-            if uname and (uid_str not in user_names or len(str(user_names[uid_str])) < len(str(uname))):
+            if uname:
                 user_names[uid_str] = uname
-            if val is not None and (uid_str not in vm_data or vm_data[uid_str] == 0.0):
-                vm_data[uid_str] = val
-                
-        for v_sub in node.values():
-            deep_extract(v_sub)
+            if t_val is not None and t_val > 0:
+                vm_data[uid_str] = t_val
+            if b_val is not None:
+                api_balance_data[uid_str] = b_val
+
+# Procesar los nodos principales donde Biwenger almacena los mánagers
+parse_entity_list(league_data.get("users", []))
+parse_entity_list(league_data.get("standings", []))
+
+# Red de seguridad recursiva por si algún nodo estuviera anidado diferente
+def deep_parse(node):
+    if isinstance(node, dict):
+        parse_entity_list([node])
+        for v in node.values():
+            deep_parse(v)
     elif isinstance(node, list):
         for item in node:
-            deep_extract(item)
+            deep_parse(item)
 
-deep_extract(league_resp)
+deep_parse(league_data)
 
-# Inicializar ajustes de usuario y aplicar fallback solo si realmente no se encontró valor en la API
+# Valores de referencia de Día 1 por si faltara alguno
+DAY_ONE_VALS = {
+    "athletik81": 21600000.0, "ring014": 21580000.0, "tubu": 21570000.0, 
+    "marroba": 21560000.0, "zhukkov": 21560000.0, "nitwolf": 21550000.0, 
+    "yoqsetio xdxd": 21550000.0, "nistalikus": 21550000.0, "moltisanti": 21540000.0, 
+    "gran gravessen": 21540000.0, "zoropurgui": 21530000.0, "_caesar_": 21510000.0, 
+    "nitrorx": 21490000.0
+}
+
 user_adjustments = {}
 for uid, name in user_names.items():
     user_adjustments[uid] = 0.0
     if uid not in vm_data or vm_data[uid] == 0.0:
         vm_data[uid] = DAY_ONE_VALS.get(str(name).lower(), 21500000.0)
 
-if not user_names:
-    for idx, (name_key, def_val) in enumerate(DAY_ONE_VALS.items()):
-        uid = str(1000 + idx)
-        user_adjustments[uid] = 0.0
-        user_names[uid] = name_key.title()
-        vm_data[uid] = def_val
-
-# --- PROCESAR TRANSFERENCIAS Y TABLÓN (LÓGICA INTACTA Y FUNCIONAL) ---
+# --- PROCESAR TRANSFERENCIAS Y TABLÓN ---
 detected_events_log = []
 
 def add_money(uid, amt, desc):
@@ -203,10 +197,14 @@ if isinstance(board, list):
 records = []
 for uid, name in user_names.items():
     v_actual = vm_data.get(uid, 0.0)
-    v_inicial = DAY_ONE_VALS.get(str(name).lower(), 21500000.0)
-    ajuste = user_adjustments.get(uid, 0.0)
     
-    saldo_real = (INITIAL_TOTAL - v_inicial) + ajuste
+    if uid in api_balance_data:
+        saldo_real = api_balance_data[uid] + user_adjustments.get(uid, 0.0)
+    else:
+        v_inicial = DAY_ONE_VALS.get(str(name).lower(), 21500000.0)
+        ajuste = user_adjustments.get(uid, 0.0)
+        saldo_real = (INITIAL_TOTAL - v_inicial) + ajuste
+        
     valor_total_caja = v_actual + saldo_real
     puja_max = saldo_real + ((max_bid_pct / 100.0) * v_actual)
     
