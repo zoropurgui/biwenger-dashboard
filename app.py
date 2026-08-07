@@ -51,61 +51,62 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
     st.rerun()
 
-# --- EXTRACCIÓN AVANZADA DESDE STANDINGS Y BÚSQUEDA PROFUNDA ---
+# --- PROCESAMIENTO Y DIAGNÓSTICO DE DATOS ---
 user_names = {}
 vm_data = {}
 api_balance_data = {}
-extraction_debug_logs = []
+extraction_debug_logs = []  # <--- FUNCIÓN AÑADIDA: Registros de diagnóstico
 
 league_data = league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
 
-# 1. Extracción principal desde 'standings' (donde Biwenger almacena los valores de los equipos en la tabla)
+# Intentar extraer desde la sección 'standings' primero
 standings_list = league_data.get("standings", [])
 if isinstance(standings_list, list):
-    for s in standings_list:
-        if not isinstance(s, dict):
+    for item in standings_list:
+        if not isinstance(item, dict):
             continue
         
-        uid = s.get("id")
-        uname = s.get("name") or s.get("username")
+        uid = item.get("id")
+        uname = item.get("name") or item.get("username")
         
-        user_obj = s.get("user")
+        user_obj = item.get("user")
         if isinstance(user_obj, dict):
             uid = user_obj.get("id") or uid
             uname = user_obj.get("name") or user_obj.get("username") or uname
 
+        # <--- FUNCIÓN AÑADIDA: Recolección de claves y estructura para diagnóstico
         debug_info = {
             "ID": uid,
             "Usuario": uname,
-            "Keys de standings item": list(s.keys()),
-            "teamValue_encontrado": None,
-            "origen": "standings"
+            "Claves en objeto item": list(item.keys()),
+            "Keys en 'team'": list(item.get("team", {}).keys()) if isinstance(item.get("team"), dict) else "No es dict",
+            "Keys en 'user'": list(item.get("user", {}).keys()) if isinstance(item.get("user"), dict) else "No es dict",
+            "Valor detectado": None,
+            "Origen": "No encontrado"
         }
 
-        # Buscar valor de equipo en standings o en objetos anidados como 'team'
         t_val = None
-        for key in ["teamValue", "value", "marketValue", "team_value", "price"]:
-            if key in s and s[key] is not None:
+        for key in ["teamValue", "value", "marketValue", "price"]:
+            if key in item and item[key] is not None:
                 try:
-                    v = float(s[key])
+                    v = float(item[key])
                     if v > 0:
                         t_val = v
-                        debug_info["origen"] = f"standings -> clave directa: {key}"
+                        debug_info["Origen"] = f"standings -> clave directa '{key}'"
                         break
                 except:
                     pass
         
         if t_val is None:
-            team_obj = s.get("team")
+            team_obj = item.get("team")
             if isinstance(team_obj, dict):
-                debug_info["keys_team_obj"] = list(team_obj.keys())
                 for key in ["value", "teamValue", "marketValue", "price"]:
                     if key in team_obj and team_obj[key] is not None:
                         try:
                             v = float(team_obj[key])
                             if v > 0:
                                 t_val = v
-                                debug_info["origen"] = f"standings -> team.{key}"
+                                debug_info["Origen"] = f"standings -> team.{key}"
                                 break
                         except:
                             pass
@@ -116,58 +117,21 @@ if isinstance(standings_list, list):
                 user_names[uid_str] = uname
             if t_val is not None:
                 vm_data[uid_str] = t_val
-                debug_info["teamValue_encontrado"] = t_val
+                debug_info["Valor detectado"] = t_val
             else:
-                debug_info["teamValue_encontrado"] = "NO ENCONTRADO"
+                debug_info["Valor detectado"] = "NO ENCONTRADO"
         
         extraction_debug_logs.append(debug_info)
 
-# 2. Rastreo recursivo global profundo por si acaso hay datos en otras ramas de la respuesta
-def deep_extract_all(node):
-    if isinstance(node, dict):
-        uid = node.get("id") or node.get("user") or node.get("userId")
-        if isinstance(uid, dict):
-            uid = uid.get("id")
-        
-        uname = node.get("name") or node.get("username") or node.get("slug")
-        
-        t_val = None
-        for k in ["teamValue", "value", "marketValue", "team_value"]:
-            if k in node and node[k] is not None:
-                try:
-                    v = float(node[k])
-                    if v > 100000:
-                        t_val = v
-                        break
-                except:
-                    pass
-        
-        team_obj = node.get("team")
-        if isinstance(team_obj, dict):
-            for k in ["value", "teamValue", "marketValue", "price"]:
-                if k in team_obj and team_obj[k] is not None:
-                    try:
-                        v = float(team_obj[k])
-                        if v > 100000:
-                            t_val = v
-                            break
-                    except:
-                        pass
-
-        if uid is not None:
-            uid_str = str(uid)
-            if uname and (uid_str not in user_names or len(str(user_names[uid_str])) < len(str(uname))):
-                user_names[uid_str] = uname
-            if t_val is not None and (uid_str not in vm_data or vm_data[uid_str] == 0.0):
-                vm_data[uid_str] = t_val
-
-        for sub_val in node.values():
-            deep_extract_all(sub_val)
-    elif isinstance(node, list):
-        for item in node:
-            deep_extract_all(item)
-
-deep_extract_all(league_resp)
+# Búsqueda complementaria en la lista 'users' por si algún nombre/id faltara
+users_list = league_data.get("users", [])
+if isinstance(users_list, list):
+    for u in users_list:
+        if not isinstance(u, dict): continue
+        uid = str(u.get("id"))
+        uname = u.get("name") or u.get("username")
+        if uid and uname and uid not in user_names:
+            user_names[uid] = uname
 
 DAY_ONE_VALS = {
     "athletik81": 21600000.0, "ring014": 21580000.0, "tubu": 21570000.0, 
@@ -270,12 +234,13 @@ if detected_events_log:
 else:
     st.info("ℹ️ No se han detectado movimientos recientes.")
 
-with st.expander("🔍 Diagnóstico Detallado de Extracción en Standings"):
-    st.markdown("Muestra los datos analizados directamente desde la sección de clasificación (`standings`).")
+# --- FUNCIÓN AÑADIDA: PANEL DE DIAGNÓSTICO ESPECÍFICO DE STANDINGS ---
+with st.expander("🔍 DIAGNÓSTICO: Inspección de Extracción de Valores en 'standings'", expanded=True):
+    st.markdown("Muestra exactamente las claves y campos que Biwenger envía dentro del array **`standings`**:")
     if extraction_debug_logs:
         st.dataframe(pd.DataFrame(extraction_debug_logs), use_container_width=True)
     else:
-        st.write("No hay registros disponibles.")
+        st.write("No se encontraron elementos en 'standings'.")
 
 with st.expander("🛠️ Panel de Diagnóstico (Ver Respuesta Bruta de la Liga)"):
     st.json(league_resp)
