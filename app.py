@@ -59,59 +59,80 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
     st.rerun()
 
-# --- EXTRACCIÓN GLOBAL Y RECURSIVA DEFINITIVA DEL VALOR DE EQUIPO ---
+# --- EXTRACCIÓN FIABLE Y DIRECTA DEL VALOR DE EQUIPO (DESDE STANDINGS) ---
 user_names = {}
 vm_data = {}
 
-def extract_from_node(node):
-    if isinstance(node, dict):
-        uid = node.get("id") or node.get("user") or node.get("userId")
-        if isinstance(uid, dict):
-            uid = uid.get("id")
-        
-        uname = node.get("name") or node.get("username") or node.get("slug")
-        
-        val = None
-        for k in ["value", "teamValue", "marketValue", "team_value"]:
-            if k in node and node[k] is not None:
-                try:
-                    v = float(node[k])
-                    if v > 100000:
-                        val = v
-                        break
-                except:
-                    pass
-        
-        if val is None:
-            for sub in ["team", "account", "profile"]:
-                sub_obj = node.get(sub)
-                if isinstance(sub_obj, dict):
-                    for k in ["value", "teamValue", "marketValue", "price"]:
-                        if k in sub_obj and sub_obj[k] is not None:
-                            try:
-                                v = float(sub_obj[k])
-                                if v > 100000:
-                                    val = v
-                                    break
-                            except:
-                                pass
-                    if val is not None:
-                        break
+league_data = league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
+standings_list = league_data.get("standings", [])
 
-        if uid is not None:
-            uid_str = str(uid)
-            if uname and (uid_str not in user_names or len(str(user_names[uid_str])) < len(str(uname))):
+if isinstance(standings_list, list) and len(standings_list) > 0:
+    for s in standings_list:
+        if isinstance(s, dict):
+            uid = s.get("id")
+            uname = s.get("name")
+            team_val = s.get("teamValue")
+            
+            if uid is not None and uname:
+                uid_str = str(uid)
                 user_names[uid_str] = uname
-            if val is not None and val > 100000:
-                vm_data[uid_str] = val
+                if team_val is not None:
+                    try:
+                        vm_data[uid_str] = float(team_val)
+                    except:
+                        pass
 
-        for v in node.values():
-            extract_from_node(v)
-    elif isinstance(node, list):
-        for item in node:
-            extract_from_node(item)
+# Respaldo recursivo por si standings viniera vacío o incompleto
+if not user_names:
+    def extract_from_node(node):
+        if isinstance(node, dict):
+            uid = node.get("id") or node.get("user") or node.get("userId")
+            if isinstance(uid, dict):
+                uid = uid.get("id")
+            
+            uname = node.get("name") or node.get("username") or node.get("slug")
+            
+            val = None
+            for k in ["value", "teamValue", "marketValue", "team_value"]:
+                if k in node and node[k] is not None:
+                    try:
+                        v = float(node[k])
+                        if v > 100000:
+                            val = v
+                            break
+                    except:
+                        pass
+            
+            if val is None:
+                for sub in ["team", "account", "profile"]:
+                    sub_obj = node.get(sub)
+                    if isinstance(sub_obj, dict):
+                        for k in ["value", "teamValue", "marketValue", "price"]:
+                            if k in sub_obj and sub_obj[k] is not None:
+                                try:
+                                    v = float(sub_obj[k])
+                                    if v > 100000:
+                                        val = v
+                                        break
+                                except:
+                                    pass
+                        if val is not None:
+                            break
 
-extract_from_node(league_resp)
+            if uid is not None:
+                uid_str = str(uid)
+                if uname and (uid_str not in user_names or len(str(user_names[uid_str])) < len(str(uname))):
+                    user_names[uid_str] = uname
+                if val is not None and val > 100000:
+                    vm_data[uid_str] = val
+
+            for v in node.values():
+                extract_from_node(v)
+        elif isinstance(node, list):
+            for item in node:
+                extract_from_node(item)
+
+    extract_from_node(league_resp)
 
 user_adjustments = {}
 for uid in user_names.keys():
