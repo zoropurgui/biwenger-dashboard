@@ -15,8 +15,6 @@ if not token:
 
 clean_token = token.strip().replace("Bearer ", "").strip()
 
-INITIAL_TOTAL = 40000000.0
-
 @st.cache_data(ttl=30)
 def load_data(t):
     h = {"Authorization": f"Bearer {t}", "X-App-Version": "2.0.0"}
@@ -51,121 +49,72 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
     st.rerun()
 
-# --- EXTRACCIÓN AVANZADA: EQUIPO Y CAJA DIRECTOS DE LA API ---
+# --- EXTRACCIÓN DIRECTA Y LIMPIA DE LA API (STANDINGS Y USERS) ---
 league_data = league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
+standings = league_data.get("standings", [])
+users_list = league_data.get("users", [])
 
-raw_users = league_data.get("users", [])
-raw_standings = league_data.get("standings", [])
-
-user_info_map = {}
-
-# 1. Cargar datos de usuarios (contienen el balance / caja real)
-if isinstance(raw_users, list):
-    for u in raw_users:
-        if isinstance(u, dict):
-            uid = u.get("id")
-            if uid is not None:
-                user_info_map[str(uid)] = dict(u)
-
-# 2. Combinar con standings (contienen el teamValue real)
-if isinstance(raw_standings, list):
-    for s in raw_standings:
-        if isinstance(s, dict):
-            uid = s.get("id")
-            if uid is None and isinstance(s.get("user"), dict):
-                uid = s.get("user").get("id")
-            if uid is not None:
-                uid_str = str(uid)
-                if uid_str not in user_info_map:
-                    user_info_map[uid_str] = dict(s)
-                else:
-                    user_info_map[uid_str].update(s)
-
-user_names = {}
-vm_data = {}
-api_balance_data = {}
+financial_data = {}
 extraction_debug_logs = []
 
-for uid_str, u in user_info_map.items():
-    uname = u.get("name") or u.get("username")
-    if not uname and isinstance(u.get("user"), dict):
-        uname = u.get("user").get("name") or u.get("user").get("username")
-    
-    if uname:
-        user_names[uid_str] = uname
-        
-    # Extraer Team Value
-    t_val = None
-    for k in ["teamValue", "value", "marketValue", "price"]:
-        if k in u and u[k] is not None:
-            try:
-                val = float(u[k])
-                if val > 0:
-                    t_val = val
-                    break
-            except:
-                pass
-    if t_val is not None:
-        vm_data[uid_str] = t_val
+# 1. Leer desde standings (fuente principal de clasificación y valor de equipo)
+if isinstance(standings, list):
+    for s in standings:
+        if not isinstance(s, dict): continue
+        uid = s.get("id")
+        if uid is None and isinstance(s.get("user"), dict):
+            uid = s.get("user").get("id")
+            
+        if uid is not None:
+            uid_str = str(uid)
+            uname = s.get("name") or s.get("username")
+            if not uname and isinstance(s.get("user"), dict):
+                uname = s.get("user").get("name") or s.get("user").get("username")
+            
+            team_val = float(s.get("teamValue", 0) or 0)
+            balance_val = float(s.get("balance", 0) or s.get("money", 0) or 0)
+            
+            financial_data[uid_str] = {
+                "name": uname or f"Mánager {uid_str}",
+                "teamValue": team_val,
+                "balance": balance_val
+            }
 
-    # Extraer Balance / Caja Real de la API
-    b_val = None
-    for b_key in ["balance", "money", "cash", "budget"]:
-        if b_key in u and u[b_key] is not None:
-            try:
-                b_val = float(u[b_key])
-                break
-            except:
-                pass
-    if b_val is None:
-        for sub in ["account", "team", "user"]:
-            sub_obj = u.get(sub)
-            if isinstance(sub_obj, dict):
-                for b_key in ["balance", "money", "cash"]:
-                    if b_key in sub_obj and sub_obj[b_key] is not None:
-                        try:
-                            b_val = float(sub_obj[b_key])
-                            break
-                        except:
-                            pass
-            if b_val is not None:
-                break
-                
-    if b_val is not None:
-        api_balance_data[uid_str] = b_val
+# 2. Combinar/Actualizar con users (fuente de balance oficial)
+if isinstance(users_list, list):
+    for u in users_list:
+        if not isinstance(u, dict): continue
+        uid = u.get("id")
+        if uid is not None:
+            uid_str = str(uid)
+            uname = u.get("name") or u.get("username")
+            balance_val = u.get("balance")
+            team_val = u.get("teamValue") or u.get("value")
+            
+            if uid_str not in financial_data:
+                financial_data[uid_str] = {
+                    "name": uname or f"Mánager {uid_str}",
+                    "teamValue": float(team_val) if team_val is not None else 0.0,
+                    "balance": float(balance_val) if balance_val is not None else 0.0
+                }
+            else:
+                if balance_val is not None:
+                    financial_data[uid_str]["balance"] = float(balance_val)
+                if team_val is not None and float(team_val) > 0:
+                    financial_data[uid_str]["teamValue"] = float(team_val)
+                if uname:
+                    financial_data[uid_str]["name"] = uname
 
+for uid_str, data in financial_data.items():
     extraction_debug_logs.append({
         "ID": uid_str,
-        "Usuario": uname,
-        "teamValue": t_val if t_val else "NO",
-        "balance_api": b_val if b_val is not None else "NO"
+        "Usuario": data["name"],
+        "Valor del Equipo": data["teamValue"],
+        "Dinero en Caja": data["balance"]
     })
 
-# Fallback por seguridad si algún dato viniera vacío
-DAY_ONE_VALS = {
-    "marroba": 21560000.0, "ring014": 21580000.0, "athletik81": 21600000.0, 
-    "tubu": 21570000.0, "zhukkov": 21240000.0, "nitwolf": 21550000.0, 
-    "yoqsetio xdxd": 21870000.0, "nistalikus": 21550000.0, "moltisanti": 21540000.0, 
-    "gran gravessen": 21540000.0, "zoropurgui": 21530000.0, "_caesar_": 21510000.0, 
-    "nitrorx": 21490000.0
-}
-
-user_adjustments = {uid: 0.0 for uid in user_names.keys()}
-
-# --- PROCESAR TRANSFERENCIAS Y TABLÓN (Ajustes recientes si procede) ---
+# --- PROCESAR HISTORIAL DE TRASPASOS Y TABLÓN PARA EL LOG ---
 detected_events_log = []
-
-def add_money(uid, amt, desc):
-    uid_str = str(uid)
-    if uid_str in user_adjustments and amt > 0:
-        user_adjustments[uid_str] += amt
-        detected_events_log.append({"Usuario": user_names.get(uid_str, uid_str), "Importe (€)": amt, "Descripción": desc})
-
-def sub_money(uid, amt, desc):
-    uid_str = str(uid)
-    if uid_str in user_adjustments and amt > 0:
-        user_adjustments[uid_str] -= amt
-        detected_events_log.append({"Usuario": user_names.get(uid_str, uid_str), "Importe (€)": -amt, "Descripción": desc})
 
 transfers = transfers_resp.get("data", []) if isinstance(transfers_resp, dict) else []
 if isinstance(transfers, list):
@@ -173,10 +122,12 @@ if isinstance(transfers, list):
         if not isinstance(t, dict): continue
         amt = float(t.get("amount", 0) or t.get("price", 0) or 0)
         s = t.get("from"); b = t.get("to")
-        if isinstance(s, dict): s = s.get("id")
-        if isinstance(b, dict): b = b.get("id")
-        if s is not None: add_money(str(s), amt, "Venta de Jugador")
-        if b is not None: sub_money(str(b), amt, "Compra de Jugador")
+        if isinstance(s, dict): s = s.get("name") or s.get("id")
+        if isinstance(b, dict): b = b.get("name") or b.get("id")
+        if s is not None:
+            detected_events_log.append({"Movimiento": "Venta de Jugador", "Detalle": f"Venta por {amt:,.0f} €"})
+        if b is not None:
+            detected_events_log.append({"Movimiento": "Compra de Jugador", "Detalle": f"Compra por {amt:,.0f} €"})
 
 board = board_resp.get("data", []) if isinstance(board_resp, dict) else []
 if isinstance(board, list):
@@ -187,34 +138,20 @@ if isinstance(board, list):
         for el in elements:
             if not isinstance(el, dict): continue
             amt = float(el.get("amount", 0) or el.get("price", 0) or el.get("value", 0) or 0)
-            from_obj = el.get("from")
-            to_obj = el.get("to")
-            s_id = from_obj.get("id") if isinstance(from_obj, dict) else from_obj
-            b_id = to_obj.get("id") if isinstance(to_obj, dict) else to_obj
-            if s_id is not None and b_id is None and amt > 0:
-                add_money(str(s_id), amt, "Venta Inmediata a Máquina")
-            elif s_id is not None and b_id is not None and amt > 0:
-                add_money(str(s_id), amt, "Venta entre mánagers")
-                sub_money(str(b_id), amt, "Compra entre mánagers")
+            if amt > 0:
+                detected_events_log.append({"Movimiento": "Movimiento en Tablón", "Detalle": f"Operación de {amt:,.0f} €"})
 
 # --- CONSTRUCCIÓN DE LA TABLA FINANCIERA ---
 records = []
-for uid, name in user_names.items():
-    v_actual = vm_data.get(uid, 21500000.0)
+for uid, data in financial_data.items():
+    v_actual = data["teamValue"]
+    saldo_real = data["balance"]
     
-    # Priorizar caja directa de la API; si no estuviera disponible, usar estimación por defecto
-    if uid in api_balance_data:
-        saldo_real = api_balance_data[uid]
-    else:
-        d_val = DAY_ONE_VALS.get(str(name).lower(), 21500000.0)
-        ajuste = user_adjustments.get(uid, 0.0)
-        saldo_real = (INITIAL_TOTAL - d_val) + ajuste
-        
     valor_total_caja = v_actual + saldo_real
     puja_max = saldo_real + ((max_bid_pct / 100.0) * v_actual)
     
     records.append({
-        "Usuario": name,
+        "Usuario": data["name"],
         "Valor del equipo": v_actual,
         "Dinero en caja": saldo_real,
         "Valor equipo + caja": valor_total_caja,
@@ -229,25 +166,26 @@ if records:
     st.subheader("📊 Monitor Financiero en Directo")
     st.dataframe(df, use_container_width=True, hide_index=True)
 else:
-    st.warning("⚠️ No hay datos para mostrar en la tabla.")
+    st.warning("⚠️ No hay datos para mostrar en la tabla. Comprueba la conexión con la liga.")
 
 st.markdown("---")
 st.subheader("📜 Historial de Traspasos y Movimientos Detectados")
 if detected_events_log:
     df_log = pd.DataFrame(detected_events_log)
-    df_log["Importe (€)"] = df_log["Importe (€)"].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
     st.dataframe(df_log, use_container_width=True, hide_index=True)
 else:
     st.info("ℹ️ No se han detectado movimientos recientes.")
 
 # --- DIAGNÓSTICO ---
-with st.expander("🔍 Diagnóstico de Extracción (API Balance vs VM)", expanded=False):
-    st.markdown("Verifica que los valores de caja y valor de equipo coinciden exactamente con los de la app de Biwenger.")
+with st.expander("🔍 Diagnóstico de Extracción Directa", expanded=False):
+    st.markdown("Comprueba aquí que los valores extraídos coinciden con los de tu aplicación de Biwenger.")
     if extraction_debug_logs:
         df_debug = pd.DataFrame(extraction_debug_logs)
+        for col in ["Valor del Equipo", "Dinero en Caja"]:
+            df_debug[col] = df_debug[col].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
         st.dataframe(df_debug, use_container_width=True, hide_index=True)
     else:
-        st.write("No hay registros de depuración.")
+        st.write("No hay registros de depuración disponibles.")
 
 with st.expander("🛠️ Panel de Diagnóstico (Ver Respuesta Bruta de la Liga)"):
     st.json(league_resp)
