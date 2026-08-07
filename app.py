@@ -270,6 +270,10 @@ else:
         df_base[col] = df_base[col].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
 
     st.write("### 👥 Auditoría Automática de Finanzas")
+    
+    # Cálculo dinámico de altura para desplegar todas las filas sin scroll
+    calculated_height = (len(df_base) + 1) * 38 + 10
+
     st.dataframe(
         df_base,
         column_config={
@@ -281,5 +285,6 @@ else:
             "Puja Máxima (€)": st.column_config.TextColumn("Puja Máxima (€)")
         },
         use_container_width=True,
-        hide_index=True
+        hide_index=True,
+        height=calculated_height
     )
