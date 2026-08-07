@@ -52,10 +52,9 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.rerun()
 
 # --- VALORES DE REFERENCIA / FALLBACK DE SEGURIDAD ---
-# Si un número no te cuadra, simplemente edita el valor en este diccionario
 DAY_ONE_VALS = {
     "athletik81": 21600000.0, "ring014": 21580000.0, "tubu": 21570000.0, 
-    "marroba": 21560000.0, "zhukkov": 21240000.0, "nitwolf": 21550000.0, 
+    "marroba": 21410000.0, "zhukkov": 21240000.0, "nitwolf": 21550000.0, 
     "yoqsetio xdxd": 21870000.0, "nistalikus": 21550000.0, "moltisanti": 21540000.0, 
     "gran gravessen": 21540000.0, "zoropurgui": 21530000.0, "_caesar_": 21510000.0, 
     "nitrorx": 21490000.0
@@ -113,15 +112,6 @@ if raw_list:
             if t_val is not None:
                 vm_data[uid] = t_val
                 
-            # Buscar balance de forma exhaustiva
-            for b_key in ["balance", "money", "cash"]:
-                if b_key in item and item[b_key] is not None:
-                    try:
-                        api_balance_data[uid] = float(item[b_key])
-                    except:
-                        pass
-                    break
-            
             extraction_debug_logs.append({
                 "ID": uid,
                 "Usuario": uname,
@@ -129,7 +119,7 @@ if raw_list:
                 "Keys disponibles": list(item.keys())
             })
 
-# GARANTÍA ABSOLUTA
+# GARANTÍA ABSOLUTA: Si por lo que sea no se cargó ningún usuario de la API, usamos el mapa completo
 if not user_names:
     for name, val in DAY_ONE_VALS.items():
         uid = name.replace(" ", "_")
@@ -137,8 +127,10 @@ if not user_names:
         if uid not in vm_data:
             vm_data[uid] = val
 
+# Asegurar que ningún usuario de DAY_ONE_VALS se quede sin valor actual
 for uid, name in list(user_names.items()):
     if uid not in vm_data or vm_data[uid] == 0.0:
+        # Buscar por nombre en minúsculas si el ID no coincide
         match_val = None
         for d_name, d_val in DAY_ONE_VALS.items():
             if d_name in str(name).lower():
@@ -201,6 +193,7 @@ for uid, name in user_names.items():
     if uid in api_balance_data:
         saldo_real = api_balance_data[uid] + user_adjustments.get(uid, 0.0)
     else:
+        # Calcular saldo inicial estimado basándose en el valor de día uno
         d_val = None
         for d_key, d_v in DAY_ONE_VALS.items():
             if d_key in str(name).lower():
@@ -240,6 +233,7 @@ if detected_events_log:
 else:
     st.info("ℹ️ No se han detectado movimientos recientes.")
 
+# --- DIAGNÓSTICO ---
 with st.expander("🔍 Diagnóstico: Extracción Blindada", expanded=False):
     st.markdown("Comprueba aquí los valores extraídos y el origen de los datos.")
     if extraction_debug_logs:
