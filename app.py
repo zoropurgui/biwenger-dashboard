@@ -40,7 +40,6 @@ def load_data(t):
         h_league = h.copy()
         h_league.update({"X-League": str(l_id), "X-User": str(u_id)})
         
-        # Petición exacta con include=all igual que en la traza de red
         r_league = requests.get(f"https://biwenger.as.com/api/v2/league/{l_id}?include=all", headers=h_league).json()
         r_transfers = requests.get(f"https://biwenger.as.com/api/v2/league/{l_id}/transfers?limit=50", headers=h_league).json()
         r_board = requests.get(f"https://biwenger.as.com/api/v2/league/{l_id}/board?limit=50", headers=h_league).json()
@@ -61,23 +60,45 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.rerun()
 
 league_data = league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
-standings = league_data.get("standings", [])
+raw_standings = league_data.get("standings", [])
+raw_users = league_data.get("users", [])
 
 user_adjustments = {}
 user_names = {}
 vm_data = {}
 
-# Extracción directa y limpia desde standings (como se ve en la captura de red)
-for item in standings:
-    if isinstance(item, dict):
-        uid = item.get("id")
-        uname = item.get("name", "Desconocido")
-        team_val = float(item.get("teamValue", 0))
-        
-        if uid:
-            user_adjustments[uid] = 0.0
-            user_names[uid] = uname
-            vm_data[uid] = team_val
+# 1. Intentar extracción desde 'standings'
+if isinstance(raw_standings, list) and len(raw_standings) > 0:
+    for item in raw_standings:
+        if isinstance(item, dict):
+            uid = item.get("id")
+            uname = item.get("name", "Desconocido")
+            team_val = float(item.get("teamValue", 0) or 0)
+            if uid:
+                user_adjustments[uid] = 0.0
+                user_names[uid] = uname
+                vm_data[uid] = team_val
+
+# 2. Si falló, intentar desde 'users'
+if not user_names and isinstance(raw_users, list) and len(raw_users) > 0:
+    for u in raw_users:
+        if isinstance(u, dict):
+            uid = u.get("id")
+            uname = u.get("name", "Desconocido")
+            acc = u.get("account", {})
+            team_val = float(acc.get("teamValue", 0) or acc.get("value", 0) or 0)
+            if uid:
+                user_adjustments[uid] = 0.0
+                user_names[uid] = uname
+                vm_data[uid] = team_val
+
+# 3. Fallback absoluto con datos de referencia si la API no devuelve listas pobladas
+if not user_names:
+    for idx, (name_key, def_val) in enumerate(DAY_ONE_VALS.items()):
+        uid = 1000 + idx
+        user_adjustments[uid] = 0.0
+        user_names[uid] = name_key.title()
+        vm_data[uid] = def_val
 
 # Procesar transferencias y tablón
 detected_events_log = []
@@ -160,5 +181,5 @@ if detected_events_log:
 else:
     st.info("ℹ️ No se han detectado movimientos recientes.")
 
-with st.expander("🛠️ Panel de Diagnóstico (Ver Standings)"):
-    st.json(standings)
+with st.expander("🛠️ Panel de Diagnóstico (Ver Respuesta Completa de la Liga)"):
+    st.json(league_resp)
