@@ -59,22 +59,19 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
     st.rerun()
 
-# --- BUSCADOR RECURSIVO INTELIGENTE DE STANDINGS ---
-standings_list = []
+# --- EXTRACCIÓN ULTRA-ROBUSTA DE STANDINGS Y VM ---
 def find_standings(obj):
     if isinstance(obj, list):
-        if obj and isinstance(obj[0], dict) and ("teamValue" in obj[0] or "name" in obj[0]):
-            return obj
-        for item in obj:
-            res = find_standings(item)
-            if res: return res
+        return obj
     elif isinstance(obj, dict):
+        for k in ["standings", "users", "members", "data", "ranking"]:
+            v = obj.get(k)
+            if isinstance(v, list) and len(v) > 0:
+                return v
         for k, v in obj.items():
-            if k in ["standings", "users", "members"] and isinstance(v, list):
-                if v and isinstance(v[0], dict) and ("teamValue" in v[0] or "name" in v[0]):
-                    return v
             res = find_standings(v)
-            if res: return res
+            if res:
+                return res
     return []
 
 standings_list = find_standings(league_resp)
@@ -85,13 +82,27 @@ vm_data = {}
 
 for item in standings_list:
     if isinstance(item, dict):
-        raw_uid = item.get("id") or item.get("user") or item.get("userId")
+        # Extraer ID
+        raw_uid = None
+        for k in ["id", "user", "userId", "user_id"]:
+            if k in item and item[k] is not None:
+                val = item[k]
+                raw_uid = val.get("id") if isinstance(val, dict) else val
+                break
+        
         if raw_uid is not None:
             uid = str(raw_uid)
-            uname = item.get("name") or item.get("username") or "Desconocido"
             
+            # Extraer Nombre
+            uname = "Desconocido"
+            for k in ["name", "username", "slug"]:
+                if k in item and item[k]:
+                    uname = str(item[k])
+                    break
+            
+            # Extraer Valor de Equipo (VM) con todas las variantes posibles
             team_val = 0.0
-            for k in ["teamValue", "value", "team_value", "vm"]:
+            for k in ["teamValue", "value", "team_value", "vm", "totalValue"]:
                 if k in item and item[k] is not None:
                     try:
                         team_val = float(item[k])
@@ -99,11 +110,26 @@ for item in standings_list:
                     except:
                         pass
             
+            # Buscar dentro de objetos anidados si viniera a cero
+            if team_val == 0.0:
+                for sub_key in ["account", "team", "user"]:
+                    sub_obj = item.get(sub_key)
+                    if isinstance(sub_obj, dict):
+                        for k in ["teamValue", "value", "team_value", "vm"]:
+                            if k in sub_obj and sub_obj[k] is not None:
+                                try:
+                                    team_val = float(sub_obj[k])
+                                    break
+                                except:
+                                    pass
+                        if team_val > 0:
+                            break
+
             user_adjustments[uid] = 0.0
             user_names[uid] = uname
             vm_data[uid] = team_val
 
-# Fallback por seguridad si no encontrara usuarios
+# Fallback absoluto si no encontrara usuarios
 if not user_names:
     for idx, (name_key, def_val) in enumerate(DAY_ONE_VALS.items()):
         uid = str(1000 + idx)
@@ -111,7 +137,7 @@ if not user_names:
         user_names[uid] = name_key.title()
         vm_data[uid] = def_val
 
-# Procesar transferencias y tablón con IDs en string
+# Procesar transferencias y tablón
 detected_events_log = []
 
 def add_money(uid, amt, desc):
@@ -160,6 +186,10 @@ if isinstance(board, list):
 records = []
 for uid, name in user_names.items():
     v_actual = vm_data.get(uid, 0.0)
+    # Respaldo con día 1 si viniera a 0
+    if v_actual == 0.0:
+        v_actual = DAY_ONE_VALS.get(str(name).lower(), 21500000.0)
+        
     v_inicial = DAY_ONE_VALS.get(str(name).lower(), 21500000.0)
     ajuste = user_adjustments.get(uid, 0.0)
     
