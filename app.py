@@ -59,77 +59,80 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
     st.rerun()
 
-# --- EXTRACCIÓN ULTRA-ROBUSTA DE STANDINGS Y VM ---
-def find_standings(obj):
-    if isinstance(obj, list):
-        return obj
-    elif isinstance(obj, dict):
-        for k in ["standings", "users", "members", "data", "ranking"]:
-            v = obj.get(k)
-            if isinstance(v, list) and len(v) > 0:
-                return v
-        for k, v in obj.items():
-            res = find_standings(v)
+# --- EXTRACCIÓN RECURSIVA INTELIGENTE DE VALORES ACTUALES ---
+def extract_users_from_json(data):
+    users = []
+    if isinstance(data, list):
+        for item in data:
+            if isinstance(item, dict) and ("id" in item or "name" in item):
+                users.append(item)
+    elif isinstance(data, dict):
+        for key in ["users", "standings", "members", "data", "ranking", "participants"]:
+            val = data.get(key)
+            if val is not None:
+                res = extract_users_from_json(val)
+                if res:
+                    return res
+        for k, v in data.items():
+            res = extract_users_from_json(v)
             if res:
                 return res
-    return []
+    return users
 
-standings_list = find_standings(league_resp)
+standings_list = extract_users_from_json(league_resp)
 
 user_adjustments = {}
 user_names = {}
 vm_data = {}
 
 for item in standings_list:
-    if isinstance(item, dict):
-        # Extraer ID
-        raw_uid = None
-        for k in ["id", "user", "userId", "user_id"]:
-            if k in item and item[k] is not None:
-                val = item[k]
-                raw_uid = val.get("id") if isinstance(val, dict) else val
-                break
-        
-        if raw_uid is not None:
-            uid = str(raw_uid)
-            
-            # Extraer Nombre
-            uname = "Desconocido"
-            for k in ["name", "username", "slug"]:
-                if k in item and item[k]:
-                    uname = str(item[k])
+    if not isinstance(item, dict):
+        continue
+    
+    raw_uid = item.get("id") or item.get("user") or item.get("userId") or item.get("user_id")
+    if isinstance(raw_uid, dict):
+        raw_uid = raw_uid.get("id")
+    if raw_uid is None:
+        continue
+    uid = str(raw_uid)
+    
+    uname = item.get("name") or item.get("username") or item.get("slug") or f"Usuario {uid}"
+    
+    # Extracción en tiempo real del valor del equipo (teamValue)
+    team_val = 0.0
+    for k in ["teamValue", "value", "team_value", "vm", "totalValue", "team_price"]:
+        if k in item and item[k] is not None:
+            try:
+                val = float(item[k])
+                if val > 0:
+                    team_val = val
                     break
-            
-            # Extraer Valor de Equipo (VM) con todas las variantes posibles
-            team_val = 0.0
-            for k in ["teamValue", "value", "team_value", "vm", "totalValue"]:
-                if k in item and item[k] is not None:
-                    try:
-                        team_val = float(item[k])
-                        break
-                    except:
-                        pass
-            
-            # Buscar dentro de objetos anidados si viniera a cero
-            if team_val == 0.0:
-                for sub_key in ["account", "team", "user"]:
-                    sub_obj = item.get(sub_key)
-                    if isinstance(sub_obj, dict):
-                        for k in ["teamValue", "value", "team_value", "vm"]:
-                            if k in sub_obj and sub_obj[k] is not None:
-                                try:
-                                    team_val = float(sub_obj[k])
-                                    break
-                                except:
-                                    pass
-                        if team_val > 0:
-                            break
+            except:
+                pass
+                
+    if team_val == 0.0:
+        for sub_key in ["account", "team", "user", "profile"]:
+            sub_obj = item.get(sub_key)
+            if isinstance(sub_obj, dict):
+                for k in ["teamValue", "value", "team_value", "vm", "totalValue"]:
+                    if k in sub_obj and sub_obj[k] is not None:
+                        try:
+                            val = float(sub_obj[k])
+                            if val > 0:
+                                team_val = val
+                                break
+                        except:
+                            pass
+                if team_val > 0:
+                    break
 
-            user_adjustments[uid] = 0.0
-            user_names[uid] = uname
-            vm_data[uid] = team_val
+    if team_val == 0.0:
+        team_val = DAY_ONE_VALS.get(uname.lower(), 21500000.0)
 
-# Fallback absoluto si no encontrara usuarios
+    user_adjustments[uid] = 0.0
+    user_names[uid] = uname
+    vm_data[uid] = team_val
+
 if not user_names:
     for idx, (name_key, def_val) in enumerate(DAY_ONE_VALS.items()):
         uid = str(1000 + idx)
@@ -186,10 +189,6 @@ if isinstance(board, list):
 records = []
 for uid, name in user_names.items():
     v_actual = vm_data.get(uid, 0.0)
-    # Respaldo con día 1 si viniera a 0
-    if v_actual == 0.0:
-        v_actual = DAY_ONE_VALS.get(str(name).lower(), 21500000.0)
-        
     v_inicial = DAY_ONE_VALS.get(str(name).lower(), 21500000.0)
     ajuste = user_adjustments.get(uid, 0.0)
     
