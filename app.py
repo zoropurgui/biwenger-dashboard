@@ -51,87 +51,96 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
     st.rerun()
 
-# --- PROCESAMIENTO Y DIAGNÓSTICO DE DATOS ---
+# --- EXTRACCIÓN Y REGISTRO DE DIAGNÓSTICO (VERSIÓN ORIGINAL SOLICITADA) ---
 user_names = {}
 vm_data = {}
 api_balance_data = {}
-extraction_debug_logs = []  # <--- FUNCIÓN AÑADIDA: Registros de diagnóstico
+extraction_debug_logs = []  # Lista para guardar el diagnóstico exacto por usuario
 
 league_data = league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
+users_list = league_data.get("users", [])
 
-# Intentar extraer desde la sección 'standings' primero
-standings_list = league_data.get("standings", [])
-if isinstance(standings_list, list):
-    for item in standings_list:
-        if not isinstance(item, dict):
+if isinstance(users_list, list):
+    for u in users_list:
+        if not isinstance(u, dict):
             continue
+        uid = u.get("id") or u.get("user") or u.get("userId")
+        uname = u.get("name") or u.get("username")
         
-        uid = item.get("id")
-        uname = item.get("name") or item.get("username")
-        
-        user_obj = item.get("user")
-        if isinstance(user_obj, dict):
-            uid = user_obj.get("id") or uid
-            uname = user_obj.get("name") or user_obj.get("username") or uname
-
-        # <--- FUNCIÓN AÑADIDA: Recolección de claves y estructura para diagnóstico
         debug_info = {
             "ID": uid,
             "Usuario": uname,
-            "Claves en objeto item": list(item.keys()),
-            "Keys en 'team'": list(item.get("team", {}).keys()) if isinstance(item.get("team"), dict) else "No es dict",
-            "Keys en 'user'": list(item.get("user", {}).keys()) if isinstance(item.get("user"), dict) else "No es dict",
-            "Valor detectado": None,
-            "Origen": "No encontrado"
+            "Keys del objeto u": list(u.keys()),
+            "teamValue_encontrado": None,
+            "origen_valor": "Ninguno (Aplicó Fallback)"
         }
-
-        t_val = None
-        for key in ["teamValue", "value", "marketValue", "price"]:
-            if key in item and item[key] is not None:
-                try:
-                    v = float(item[key])
-                    if v > 0:
-                        t_val = v
-                        debug_info["Origen"] = f"standings -> clave directa '{key}'"
-                        break
-                except:
-                    pass
         
-        if t_val is None:
-            team_obj = item.get("team")
-            if isinstance(team_obj, dict):
-                for key in ["value", "teamValue", "marketValue", "price"]:
-                    if key in team_obj and team_obj[key] is not None:
-                        try:
-                            v = float(team_obj[key])
-                            if v > 0:
-                                t_val = v
-                                debug_info["Origen"] = f"standings -> team.{key}"
-                                break
-                        except:
-                            pass
-
-        if uid is not None:
+        if uid is not None and uname:
             uid_str = str(uid)
-            if uname:
-                user_names[uid_str] = uname
+            user_names[uid_str] = uname
+            
+            t_val = None
+            # 1. Claves directas
+            for key in ["teamValue", "value", "marketValue", "team_value", "price"]:
+                if key in u and u[key] is not None:
+                    try:
+                        v = float(u[key])
+                        if v > 0:
+                            t_val = v
+                            debug_info["origen_valor"] = f"Clave directa: {key}"
+                            break
+                    except:
+                        pass
+            
+            # 2. Objetos anidados
+            if t_val is None:
+                for sub_key in ["team", "account", "profile"]:
+                    sub_obj = u.get(sub_key)
+                    if isinstance(sub_obj, dict):
+                        debug_info[f"keys_{sub_key}"] = list(sub_obj.keys())
+                        for key in ["teamValue", "value", "marketValue", "price"]:
+                            if key in sub_obj and sub_obj[key] is not None:
+                                try:
+                                    v = float(sub_obj[key])
+                                    if v > 0:
+                                        t_val = v
+                                        debug_info["origen_valor"] = f"Anidado en '{sub_key}': {key}"
+                                        break
+                                except:
+                                    pass
+                        if t_val is not None:
+                            break
+            
+            # 3. Sumar plantilla
+            if t_val is None:
+                for squad_key in ["players", "squad", "team"]:
+                    squad = u.get(squad_key)
+                    if isinstance(squad, list):
+                        calc_val = 0.0
+                        for p in squad:
+                            if isinstance(p, dict):
+                                p_val = p.get("price") or p.get("value") or p.get("marketValue") or 0
+                                calc_val += float(p_val)
+                        if calc_val > 0:
+                            t_val = calc_val
+                            debug_info["origen_valor"] = f"Suma de plantilla ({squad_key})"
+                            break
+            
             if t_val is not None:
                 vm_data[uid_str] = t_val
-                debug_info["Valor detectado"] = t_val
+                debug_info["teamValue_encontrado"] = t_val
             else:
-                debug_info["Valor detectado"] = "NO ENCONTRADO"
+                debug_info["teamValue_encontrado"] = "NO ENCONTRADO"
+
+            for b_key in ["balance", "money", "cash"]:
+                if b_key in u and u[b_key] is not None:
+                    try:
+                        api_balance_data[uid_str] = float(u[b_key])
+                        break
+                    except:
+                        pass
         
         extraction_debug_logs.append(debug_info)
-
-# Búsqueda complementaria en la lista 'users' por si algún nombre/id faltara
-users_list = league_data.get("users", [])
-if isinstance(users_list, list):
-    for u in users_list:
-        if not isinstance(u, dict): continue
-        uid = str(u.get("id"))
-        uname = u.get("name") or u.get("username")
-        if uid and uname and uid not in user_names:
-            user_names[uid] = uname
 
 DAY_ONE_VALS = {
     "athletik81": 21600000.0, "ring014": 21580000.0, "tubu": 21570000.0, 
@@ -234,13 +243,13 @@ if detected_events_log:
 else:
     st.info("ℹ️ No se han detectado movimientos recientes.")
 
-# --- FUNCIÓN AÑADIDA: PANEL DE DIAGNÓSTICO ESPECÍFICO DE STANDINGS ---
-with st.expander("🔍 DIAGNÓSTICO: Inspección de Extracción de Valores en 'standings'", expanded=True):
-    st.markdown("Muestra exactamente las claves y campos que Biwenger envía dentro del array **`standings`**:")
+# --- PANEL DE DIAGNÓSTICO DETALLADO (SOLICITADO) ---
+with st.expander("🔍 Diagnóstico Detallado de Extracción de Valores", expanded=True):
+    st.markdown("Este panel muestra qué estructura y claves ha encontrado el script para cada usuario en la respuesta de la API.")
     if extraction_debug_logs:
         st.dataframe(pd.DataFrame(extraction_debug_logs), use_container_width=True)
     else:
-        st.write("No se encontraron elementos en 'standings'.")
+        st.write("No hay registros de depuración disponibles.")
 
 with st.expander("🛠️ Panel de Diagnóstico (Ver Respuesta Bruta de la Liga)"):
     st.json(league_resp)
