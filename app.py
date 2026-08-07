@@ -55,8 +55,8 @@ if st.sidebar.button("🔄 Recargar Datos"):
 # Si un número no te cuadra, simplemente edita el valor en este diccionario
 DAY_ONE_VALS = {
     "athletik81": 21600000.0, "ring014": 21580000.0, "tubu": 21570000.0, 
-    "marroba": 21560000.0, "zhukkov": 21240000.0, "nitwolf": 21550000.0, 
-    "yoqsetio xdxd": 21870000.0, "nistalikus": 21550000.0, "moltisanti": 21540000.0, 
+    "marroba": 21560000.0, "zhukkov": 21560000.0, "nitwolf": 21550000.0, 
+    "yoqsetio xdxd": 21550000.0, "nistalikus": 21550000.0, "moltisanti": 21540000.0, 
     "gran gravessen": 21540000.0, "zoropurgui": 21530000.0, "_caesar_": 21510000.0, 
     "nitrorx": 21490000.0
 }
