@@ -51,89 +51,81 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
     st.rerun()
 
-# --- EXTRACCIÓN AVANZADA Y DIRECTA DE VALORES REALES DE LA API ---
+# --- EXTRACCIÓN EXHAUSTIVA Y BLINDADA DE VALORES DE EQUIPO ---
 user_names = {}
 vm_data = {}
 api_balance_data = {}
 
 league_data = league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
+users_list = league_data.get("users", [])
 
-def parse_entity_list(entity_list):
-    if not isinstance(entity_list, list):
-        return
-    for item in entity_list:
-        if not isinstance(item, dict):
+if isinstance(users_list, list):
+    for u in users_list:
+        if not isinstance(u, dict):
             continue
-        uid = item.get("id") or item.get("user") or item.get("userId")
-        if isinstance(uid, dict):
-            uid = uid.get("id")
+        uid = u.get("id") or u.get("user") or u.get("userId")
+        uname = u.get("name") or u.get("username")
         
-        uname = item.get("name") or item.get("username") or item.get("slug")
-        
-        # Búsqueda exhaustiva del Valor de Equipo real
-        t_val = None
-        for k in ["teamValue", "value", "marketValue", "team_value"]:
-            if k in item and item[k] is not None:
-                try:
-                    v = float(item[k])
-                    if v > 0:
-                        t_val = v
-                        break
-                except:
-                    pass
-        
-        if t_val is None:
-            for sub in ["team", "account", "profile"]:
-                sub_obj = item.get(sub)
-                if isinstance(sub_obj, dict):
-                    for k in ["value", "teamValue", "marketValue", "price"]:
-                        if k in sub_obj and sub_obj[k] is not None:
-                            try:
-                                v = float(sub_obj[k])
-                                if v > 0:
-                                    t_val = v
-                                    break
-                            except:
-                                pass
-                    if t_val is not None:
-                        break
-
-        # Búsqueda de saldo/dinero directo si lo provee la API
-        b_val = None
-        for k in ["balance", "money", "cash"]:
-            if k in item and item[k] is not None:
-                try:
-                    b_val = float(item[k])
-                    break
-                except:
-                    pass
-
-        if uid is not None:
+        if uid is not None and uname:
             uid_str = str(uid)
-            if uname:
-                user_names[uid_str] = uname
-            if t_val is not None and t_val > 0:
+            user_names[uid_str] = uname
+            
+            # 1. Buscar valor de equipo en claves directas
+            t_val = None
+            for key in ["teamValue", "value", "marketValue", "team_value", "price"]:
+                if key in u and u[key] is not None:
+                    try:
+                        v = float(u[key])
+                        if v > 0:
+                            t_val = v
+                            break
+                    except:
+                        pass
+            
+            # 2. Buscar en objetos anidados (team, account, profile)
+            if t_val is None:
+                for sub_key in ["team", "account", "profile"]:
+                    sub_obj = u.get(sub_key)
+                    if isinstance(sub_obj, dict):
+                        for key in ["teamValue", "value", "marketValue", "price"]:
+                            if key in sub_obj and sub_obj[key] is not None:
+                                try:
+                                    v = float(sub_obj[key])
+                                    if v > 0:
+                                        t_val = v
+                                        break
+                                except:
+                                    pass
+                        if t_val is not None:
+                            break
+            
+            # 3. Sumar plantilla de jugadores si está disponible en el objeto
+            if t_val is None:
+                for squad_key in ["players", "squad", "team"]:
+                    squad = u.get(squad_key)
+                    if isinstance(squad, list):
+                        calc_val = 0.0
+                        for p in squad:
+                            if isinstance(p, dict):
+                                p_val = p.get("price") or p.get("value") or p.get("marketValue") or 0
+                                calc_val += float(p_val)
+                        if calc_val > 0:
+                            t_val = calc_val
+                            break
+            
+            if t_val is not None:
                 vm_data[uid_str] = t_val
-            if b_val is not None:
-                api_balance_data[uid_str] = b_val
 
-# Procesar los nodos principales donde Biwenger almacena los mánagers
-parse_entity_list(league_data.get("users", []))
-parse_entity_list(league_data.get("standings", []))
+            # Buscar saldo en caja directo si la API lo provee
+            for b_key in ["balance", "money", "cash"]:
+                if b_key in u and u[b_key] is not None:
+                    try:
+                        api_balance_data[uid_str] = float(u[b_key])
+                        break
+                    except:
+                        pass
 
-# Red de seguridad recursiva por si algún nodo estuviera anidado diferente
-def deep_parse(node):
-    if isinstance(node, dict):
-        parse_entity_list([node])
-        for v in node.values():
-            deep_parse(v)
-    elif isinstance(node, list):
-        for item in node:
-            deep_parse(item)
-
-deep_parse(league_data)
-
-# Valores de referencia de Día 1 por si faltara alguno
+# Valores de referencia de Día 1 por si algún usuario completamente nuevo no tuviera histórico
 DAY_ONE_VALS = {
     "athletik81": 21600000.0, "ring014": 21580000.0, "tubu": 21570000.0, 
     "marroba": 21560000.0, "zhukkov": 21560000.0, "nitwolf": 21550000.0, 
@@ -146,6 +138,7 @@ user_adjustments = {}
 for uid, name in user_names.items():
     user_adjustments[uid] = 0.0
     if uid not in vm_data or vm_data[uid] == 0.0:
+        # Fallback inteligente usando el nombre en minúsculas
         vm_data[uid] = DAY_ONE_VALS.get(str(name).lower(), 21500000.0)
 
 # --- PROCESAR TRANSFERENCIAS Y TABLÓN ---
