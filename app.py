@@ -145,28 +145,54 @@ if raw_list:
       if t_val is not None: current_vm_data[uid] = t_val
       extraction_debug_logs.append({"ID": uid, "Usuario": uname})
 
-# --- PROCESAMIENTO OCR (TESSERACT) ---
+# --- PROCESAMIENTO OCR MEJORADO (TESSERACT POR FILAS) ---
 if uploaded_file is not None:
-    st.write("🔍 Leyendo captura con Tesseract...")
+    st.write("🔍 Leyendo captura por filas con Tesseract...")
     try:
         img = Image.open(uploaded_file).convert('L')
         data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
-        df_ocr = pd.DataFrame(data)
-        df_ocr = df_ocr[df_ocr.conf != -1]
         
+        rows = {}
+        for i in range(len(data['text'])):
+            text = data['text'][i].strip()
+            if not text:
+                continue
+            top = data['top'][i]
+            matched_row = None
+            for r_top in rows:
+                if abs(r_top - top) < 15:
+                    matched_row = r_top
+                    break
+            if matched_row is None:
+                rows[top] = []
+                matched_row = top
+            rows[matched_row].append(text)
+            
         known_users = {str(name).lower().strip(): uid for uid, name in user_names.items()}
         
-        for i in range(len(df_ocr)):
-            text = str(df_ocr.iloc[i]['text']).lower()
+        for r_top, words in rows.items():
+            row_text = " ".join(words).lower()
+            
+            matched_uid = None
             for u_name, uid in known_users.items():
-                if u_name in text or text in u_name:
-                    row_text = df_ocr[df_ocr['block_num'] == df_ocr.iloc[i]['block_num']]['text'].tolist()
-                    for t in row_text:
-                        clean_t = t.replace('.', '').replace(',', '').replace('€', '').replace('M', '').strip()
-                        if clean_t.isdigit() and len(clean_t) > 6:
-                             current_vm_data[uid] = float(clean_t)
-                             break
-        st.success("✅ Valores actualizados mediante la captura.")
+                parts = u_name.split()
+                if any(p in row_text for p in parts if len(p) > 2) or u_name in row_text:
+                    matched_uid = uid
+                    break
+                    
+            matched_val = None
+            for w in words:
+                clean_w = ''.join(c for c in w if c.isdigit())
+                if clean_w.isdigit() and len(clean_w) >= 6:
+                    val = float(clean_w)
+                    if 100000 <= val <= 1000000000:
+                        matched_val = val
+                        break
+                        
+            if matched_uid and matched_val:
+                current_vm_data[matched_uid] = matched_val
+                
+        st.success("✅ Valores actualizados correctamente desde la imagen.")
     except Exception as e:
         st.error(f"Error procesando la imagen: {e}")
 
