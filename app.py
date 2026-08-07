@@ -67,7 +67,7 @@ if st.sidebar.button("🔄 Recargar Datos"):
   st.cache_data.clear()
   st.rerun()
 
-# --- VALORES DE REFERENCIA / FALLBACK DE SEGURIDAD ---
+# --- VALORES DE REFERENCIA / DÍA 1 ---
 DAY_ONE_VALS = {
     "athletik81": 21600000.0,
     "ring014": 21580000.0,
@@ -84,7 +84,16 @@ DAY_ONE_VALS = {
     "nitrorx": 21490000.0,
 }
 
-# --- EXTRACCIÓN BLINDADA Y ROBUSTA ---
+
+def get_day_one_val(name):
+  n_lower = str(name).lower().strip()
+  for d_key, d_v in DAY_ONE_VALS.items():
+    if d_key in n_lower:
+      return d_v
+  return 21500000.0
+
+
+# --- EXTRACCIÓN DE DATOS DE LA LIGA ---
 league_data = league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
 
 raw_list = []
@@ -98,7 +107,7 @@ for key_name in ["standings", "users", "members"]:
     break
 
 user_names = {}
-vm_data = {}
+current_vm_data = {}
 api_balance_data = {}
 extraction_debug_logs = []
 
@@ -122,9 +131,8 @@ if raw_list:
     if uid and uname:
       user_names[uid] = uname
 
-      # Buscar teamValue de forma exhaustiva (incluyendo objetos anidados)
+      # Búsqueda exhaustiva del valor actual del equipo en la API
       t_val = None
-      # 1. Búsqueda en claves directas
       for k in ["teamValue", "value", "marketValue", "price", "team_value"]:
         if k in item and item[k] is not None:
           try:
@@ -135,12 +143,17 @@ if raw_list:
           except:
             pass
 
-      # 2. Búsqueda en subdiccionarios si no se encontró arriba
       if t_val is None:
         for sub_key in ["team", "account", "user", "data"]:
           sub_obj = item.get(sub_key)
           if isinstance(sub_obj, dict):
-            for k in ["teamValue", "value", "marketValue", "price", "team_value"]:
+            for k in [
+                "teamValue",
+                "value",
+                "marketValue",
+                "price",
+                "team_value",
+            ]:
               if k in sub_obj and sub_obj[k] is not None:
                 try:
                   val = float(sub_obj[k])
@@ -153,7 +166,7 @@ if raw_list:
               break
 
       if t_val is not None:
-        vm_data[uid] = t_val
+        current_vm_data[uid] = t_val
 
       extraction_debug_logs.append({
           "ID": uid,
@@ -162,23 +175,13 @@ if raw_list:
           "Keys disponibles": list(item.keys()),
       })
 
-# GARANTÍA ABSOLUTA: Si por lo que sea no se cargó ningún usuario de la API, usamos el mapa completo
+# Asegurar usuarios por defecto si no vienen de la API
 if not user_names:
   for name, val in DAY_ONE_VALS.items():
     uid = name.replace(" ", "_")
     user_names[uid] = name.title()
-    if uid not in vm_data:
-      vm_data[uid] = val
-
-# Asegurar que ningún usuario se quede sin valor actual
-for uid, name in list(user_names.items()):
-  if uid not in vm_data or vm_data[uid] == 0.0:
-    match_val = None
-    for d_name, d_val in DAY_ONE_VALS.items():
-      if d_name in str(name).lower():
-        match_val = d_val
-        break
-    vm_data[uid] = match_val if match_val else 21500000.0
+    if uid not in current_vm_data:
+      current_vm_data[uid] = val
 
 user_adjustments = {uid: 0.0 for uid in user_names.keys()}
 
@@ -251,18 +254,13 @@ if isinstance(board, list):
 # --- CONSTRUCCIÓN DE LA TABLA FINANCIERA ---
 records = []
 for uid, name in user_names.items():
-  v_actual = vm_data.get(uid, 21500000.0)
+  v_inicial = get_day_one_val(name)
+  v_actual = current_vm_data.get(uid, v_inicial)
   ajuste = user_adjustments.get(uid, 0.0)
 
   if uid in api_balance_data:
     saldo_real = api_balance_data[uid] - ajuste
   else:
-    d_val = None
-    for d_key, d_v in DAY_ONE_VALS.items():
-      if d_key in str(name).lower():
-        d_val = d_v
-        break
-    v_inicial = d_val if d_val else 21500000.0
     saldo_real = (INITIAL_TOTAL - v_inicial) - ajuste
 
   valor_total_caja = v_actual + saldo_real
@@ -270,7 +268,8 @@ for uid, name in user_names.items():
 
   records.append({
       "Usuario": name,
-      "Valor de equipo dia 1": v_actual,
+      "Valor de equipo día 1": v_inicial,
+      "Valor actual del equipo": v_actual,
       "Dinero en caja": saldo_real,
       "Balance": ajuste,
       "Valor equipo + caja": valor_total_caja,
@@ -282,7 +281,8 @@ if records:
       "Valor equipo + caja", ascending=False
   )
   for col in [
-      "Valor de equipo dia 1",
+      "Valor de equipo día 1",
+      "Valor actual del equipo",
       "Dinero en caja",
       "Balance",
       "Valor equipo + caja",
