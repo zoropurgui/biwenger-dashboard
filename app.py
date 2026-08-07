@@ -72,11 +72,10 @@ DAY_ONE_FALLBACK = {
     "nitrorx": 21490000.0
 }
 
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=5)
 def fetch_api_data(t_val, l_val, u_val):
     results = {"status": 0, "league": None, "standings": [], "board": [], "raw_err": ""}
     
-    # 1. Petición a la liga
     try:
         r = requests.get("https://biwenger.as.com/api/v2/league", headers=headers, timeout=8)
         results["status"] = r.status_code
@@ -89,7 +88,6 @@ def fetch_api_data(t_val, l_val, u_val):
         results["raw_err"] = str(e)
         return results
 
-    # 2. Petición a la clasificación con límite extendido
     try:
         rs = requests.get("https://biwenger.as.com/api/v2/league/standings?offset=0&limit=100", headers=headers, timeout=8)
         if rs.status_code == 200:
@@ -97,7 +95,6 @@ def fetch_api_data(t_val, l_val, u_val):
     except Exception:
         pass
 
-    # 3. Descarga del tablón
     try:
         rb = requests.get("https://biwenger.as.com/api/v2/league/board?limit=1000", headers=headers, timeout=8)
         if rb.status_code == 200:
@@ -119,7 +116,6 @@ if not api_success:
     st.error(f"⚠️ Error al conectar con Biwenger (Código HTTP: {status_code})")
     with st.expander("🔍 Ver detalle del error enviado por Biwenger"):
         st.code(api_data["raw_err"] if api_data["raw_err"] else "Sin respuesta del servidor.")
-    st.warning("👉 Verifica que el **User ID** pertenezca a la cuenta del **Bearer Token** y a la liga.")
 else:
     st.subheader(f"🏆 Liga: {league_info.get('name', 'FC Biwenger Primera División')}")
     
@@ -130,6 +126,7 @@ else:
         raw_users.extend(standings_data)
 
     user_stats = {}
+    id_to_name = {}
     
     for u in raw_users:
         if not isinstance(u, dict):
@@ -144,8 +141,8 @@ else:
             
         uid = int(uid)
         uname = u.get("name") or u_dict.get("name") or f"Mánager {uid}"
+        id_to_name[uid] = str(uname)
         
-        # Intentar obtener valor desde la API
         tv = 0.0
         for key in ["teamValue", "value", "team_value", "squadValue"]:
             if u.get(key) is not None:
@@ -163,12 +160,10 @@ else:
                 except (ValueError, TypeError):
                     pass
 
-        # Aplicar datos reales de la captura si la API devuelve 0
         if tv == 0.0:
             clean_name = str(uname).strip().lower()
             tv = DAY_ONE_FALLBACK.get(clean_name, 0.0)
 
-        # Avatar
         icon_raw = u.get("icon") or u.get("avatar") or u_dict.get("icon") or u_dict.get("avatar")
         if icon_raw:
             icon_str = str(icon_raw)
@@ -195,7 +190,9 @@ else:
             if icon_url != "https://biwenger.as.com/assets/images/user.png":
                 user_stats[uid]["icon"] = icon_url
 
-    # Procesamiento del Tablón
+    # --- PROCESAMIENTO Y REGISTRO DE TRANSACCIONES ---
+    detected_transfers = []
+
     if isinstance(board_events, list):
         for event in board_events:
             if not isinstance(event, dict):
@@ -209,7 +206,7 @@ else:
                 if not isinstance(item, dict):
                     continue
                 
-                raw_amount = item.get("amount") or item.get("price") or item.get("value") or event.get("amount") or 0
+                raw_amount = item.get("amount") or item.get("price") or item.get("value") or item.get("bid") or event.get("amount") or 0
                 try:
                     amount = float(raw_amount)
                 except (ValueError, TypeError):
@@ -229,20 +226,42 @@ else:
                 except (ValueError, TypeError):
                     buyer_id = None
 
-                if any(t in ev_type for t in ["transfer", "market", "clause", "purchase", "sale", "assignment"]):
+                # Detectar transferencias/fichajes/ventas
+                is_transfer = any(t in ev_type for t in ["transfer", "market", "clause", "purchase", "sale", "assignment", "deal", "trade"])
+                is_bonus = any(t in ev_type for t in ["bonus", "reward", "prize", "admin"])
+
+                if is_transfer and amount > 0:
+                    seller_name = id_to_name.get(seller_id, "Mercado") if seller_id else "Mercado"
+                    buyer_name = id_to_name.get(buyer_id, "Mercado") if buyer_id else "Mercado"
+                    
                     if seller_id in user_stats:
                         user_stats[seller_id]["gained"] += amount
                     if buyer_id in user_stats:
                         user_stats[buyer_id]["spent"] += amount
-                elif any(t in ev_type for t in ["bonus", "reward", "prize", "admin"]):
+
+                    detected_transfers.append({
+                        "Tipo": "Venta/Fichaje",
+                        "Vendedor": seller_name,
+                        "Comprador": buyer_name,
+                        "Importe (€)": amount
+                    })
+
+                elif is_bonus and amount > 0:
+                    buyer_name = id_to_name.get(buyer_id, "Mánager")
                     if buyer_id in user_stats:
                         user_stats[buyer_id]["gained"] += amount
+
+                    detected_transfers.append({
+                        "Tipo": "Prima/Abono",
+                        "Vendedor": "Administrador",
+                        "Comprador": buyer_name,
+                        "Importe (€)": amount
+                    })
 
     records = []
     for uid, info in user_stats.items():
         squad_val = info["squad_val"]
         
-        # Dinero en Caja = 40M - Valor de Plantilla Inicial - Gastos + Ingresos
         if info["real_balance"] is not None:
             cash = float(info["real_balance"])
         else:
@@ -265,13 +284,11 @@ else:
     if not df_base.empty and "Valor Equipo (€)" in df_base.columns:
         df_base = df_base.sort_values(by="Valor Equipo (€)", ascending=False)
 
-    # Formato numérico
     for col in ["Valor Equipo (€)", "Dinero en Caja (€)", "Valor Total (€)", "Puja Máxima (€)"]:
         df_base[col] = df_base[col].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
 
     st.write("### 👥 Auditoría Automática de Finanzas")
     
-    # Cálculo dinámico de altura para desplegar todas las filas sin scroll
     calculated_height = (len(df_base) + 1) * 38 + 10
 
     st.dataframe(
@@ -288,3 +305,12 @@ else:
         hide_index=True,
         height=calculated_height
     )
+
+    # --- DESPLEGABLE DE AUDITORÍA DE TRANSACCIONES DETECTADAS ---
+    with st.expander("📜 Ver Fichajes y Ventas Detectados por el Monitor"):
+        if detected_transfers:
+            df_trans = pd.DataFrame(detected_transfers)
+            df_trans["Importe (€)"] = df_trans["Importe (€)"].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
+            st.dataframe(df_trans, use_container_width=True, hide_index=True)
+        else:
+            st.info("Aún no se han detectado movimientos de mercado registrados en el tablón de Biwenger.")
