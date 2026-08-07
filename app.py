@@ -10,7 +10,7 @@ st.title("⚽ Monitor Financiero Biwenger")
 st.sidebar.header("🔑 Credenciales de Biwenger")
 token = st.sidebar.text_input("Bearer Token", type="password", help="Pega el token sin 'Bearer ' delante")
 league_id = st.sidebar.text_input("League ID", help="ID de la liga")
-user_id = st.sidebar.text_input("User ID (Opcional)", help="ID de tu mánager (dejar en blanco si da error)")
+user_id = st.sidebar.text_input("User ID (Obligatorio)", help="ID de tu mánager")
 
 st.sidebar.header("⚙️ Reglas Financieras")
 initial_budget = st.sidebar.number_input(
@@ -33,8 +33,8 @@ if st.sidebar.button("🔄 Recargar datos (Limpiar Caché)"):
     st.cache_data.clear()
     st.rerun()
 
-if not token or not league_id:
-    st.info("👈 Introduce tu **Bearer Token** y el **League ID** en la barra lateral.")
+if not token or not league_id or not user_id:
+    st.info("👈 Introduce tu **Bearer Token**, **League ID** y **User ID** en la barra lateral para conectar.")
     st.stop()
 
 # Limpieza de valores
@@ -43,24 +43,23 @@ if clean_token.lower().startswith("bearer "):
     clean_token = clean_token[7:].strip()
 
 clean_league_id = str(league_id).strip()
-clean_user_id = str(user_id).strip() if user_id else ""
+clean_user_id = str(user_id).strip()
 
 headers = {
     "Authorization": f"Bearer {clean_token}",
     "X-League": clean_league_id,
+    "X-User": clean_user_id,
     "Accept": "application/json, text/plain, */*",
     "X-App-Version": "2.0.0",
     "X-Lang": "es",
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 }
-if clean_user_id:
-    headers["X-User"] = clean_user_id
 
 @st.cache_data(ttl=15)
 def fetch_api_data(t_val, l_val, u_val):
-    results = {"status": 0, "league": None, "board": [], "raw_err": ""}
+    results = {"status": 0, "league": None, "standings": [], "board": [], "raw_err": ""}
     
-    # 1. Petición a la Liga
+    # 1. Petición principal de la liga
     try:
         r = requests.get("https://biwenger.as.com/api/v2/league", headers=headers, timeout=8)
         results["status"] = r.status_code
@@ -73,7 +72,15 @@ def fetch_api_data(t_val, l_val, u_val):
         results["raw_err"] = str(e)
         return results
 
-    # 2. Petición al Tablón (Historial de fichajes/ventas)
+    # 2. Petición a la Clasificación (donde residen los valores de plantilla real)
+    try:
+        rs = requests.get("https://biwenger.as.com/api/v2/league/standings", headers=headers, timeout=8)
+        if rs.status_code == 200:
+            results["standings"] = rs.json().get("data", {}).get("standings", [])
+    except Exception:
+        pass
+
+    # 3. Descarga del tablón de eventos
     try:
         rb = requests.get("https://biwenger.as.com/api/v2/league/board?limit=1000", headers=headers, timeout=8)
         if rb.status_code == 200:
@@ -86,68 +93,90 @@ def fetch_api_data(t_val, l_val, u_val):
 api_data = fetch_api_data(clean_token, clean_league_id, clean_user_id)
 status_code = api_data["status"]
 league_info = api_data["league"]
+standings_data = api_data["standings"]
 board_events = api_data["board"]
 
-api_success = False
-parsed_users = []
+api_success = status_code == 200 and isinstance(league_info, dict)
 
-if status_code == 200 and isinstance(league_info, dict):
-    users_list = league_info.get("users", []) or league_info.get("standings", [])
-    if users_list:
-        api_success = True
-
-# --- GESTIÓN DE ERRORES DE API Y MODOS DE TRABAJO ---
 if not api_success:
     st.error(f"⚠️ Error al conectar con Biwenger (Código HTTP: {status_code})")
-    
     with st.expander("🔍 Ver detalle del error enviado por Biwenger"):
         st.code(api_data["raw_err"] if api_data["raw_err"] else "Sin respuesta del servidor.")
-    
-    st.warning(
-        "👉 **Soluciones rápidas:**\n"
-        "1. El **Bearer Token** ha caducado. Abre la web de Biwenger (F12 -> Red/Network) y copia uno nuevo.\n"
-        "2. Si has puesto un **User ID**, prueba a **dejarlo completamente en blanco** en la barra lateral.\n"
-        "3. Comprueba que el **League ID** (`310321`) pertenezca a la cuenta con la que iniciaste sesión."
-    )
-    
-    st.write("---")
-    st.subheader("🧪 Modo Manual de Respaldo")
-    st.info("Puedes usar esta tabla para consultar o editar valores mientras actualizas las credenciales:")
-
-    records = [
-        {"Icono": "https://biwenger.as.com/assets/images/user.png", "Usuario": "Mánager 1", "Valor Equipo (€)": 15000000.0},
-        {"Icono": "https://biwenger.as.com/assets/images/user.png", "Usuario": "Mánager 2", "Valor Equipo (€)": 18000000.0},
-    ]
-    df_base = pd.DataFrame(records)
+    st.warning("👉 Verifica las credenciales introducidas en la barra lateral.")
 else:
-    st.subheader(f"🏆 Liga: {league_info.get('name', 'Novedades de la Liga')}")
+    st.subheader(f"🏆 Liga: {league_info.get('name', 'FC Biwenger Primera División')}")
     
-    users_list = league_info.get("users", []) or league_info.get("standings", [])
+    # Combinar usuarios de /league y /league/standings
+    raw_users = league_info.get("users", []) or []
+    if isinstance(league_info.get("standings"), list):
+        raw_users.extend(league_info["standings"])
+    if isinstance(standings_data, list):
+        raw_users.extend(standings_data)
+
     user_stats = {}
     
-    for u in users_list:
-        if isinstance(u, dict):
-            uid = u.get("id") or (u.get("user", {}).get("id") if isinstance(u.get("user"), dict) else None)
-            uname = u.get("name") or (u.get("user", {}).get("name") if isinstance(u.get("user"), dict) else f"Mánager {uid}")
-            tv = float(u.get("teamValue") or u.get("value") or 0.0)
+    for u in raw_users:
+        if not isinstance(u, dict):
+            continue
+        
+        # Extraer ID y Nombre
+        uid = u.get("id")
+        u_dict = u.get("user") if isinstance(u.get("user"), dict) else {}
+        
+        if not uid:
+            uid = u_dict.get("id")
             
-            icon_raw = u.get("icon") or u.get("avatar") or (u.get("user", {}).get("icon") if isinstance(u.get("user"), dict) else None)
-            if icon_raw:
-                icon_str = str(icon_raw)
-                icon_url = icon_str if icon_str.startswith("http") else f"https://biwenger.as.com/assets/images/{icon_str}"
-            else:
-                icon_url = "https://biwenger.as.com/assets/images/user.png"
+        if not uid:
+            continue
+            
+        uid = int(uid)
+        uname = u.get("name") or u_dict.get("name") or f"Mánager {uid}"
+        
+        # Extraer Valor de Equipo buscando en todas las claves posibles
+        tv = 0.0
+        for key in ["teamValue", "value", "team_value", "squadValue"]:
+            if u.get(key) is not None:
+                try:
+                    tv = float(u[key])
+                    break
+                except (ValueError, TypeError):
+                    pass
+            if u_dict.get(key) is not None:
+                try:
+                    tv = float(u_dict[key])
+                    break
+                except (ValueError, TypeError):
+                    pass
 
-            if uid:
-                user_stats[int(uid)] = {
-                    "name": str(uname),
-                    "icon": icon_url,
-                    "spent": 0.0,
-                    "gained": 0.0,
-                    "squad_val": tv,
-                    "real_balance": u.get("balance")
-                }
+        # Extraer Avatar
+        icon_raw = u.get("icon") or u.get("avatar") or u_dict.get("icon") or u_dict.get("avatar")
+        if icon_raw:
+            icon_str = str(icon_raw)
+            icon_url = icon_str if icon_str.startswith("http") else f"https://biwenger.as.com/assets/images/{icon_str}"
+        else:
+            icon_url = "https://biwenger.as.com/assets/images/user.png"
 
+        real_bal = u.get("balance") or u_dict.get("balance")
+
+        if uid not in user_stats:
+            user_stats[uid] = {
+                "name": str(uname),
+                "icon": icon_url,
+                "spent": 0.0,
+                "gained": 0.0,
+                "squad_val": tv,
+                "real_balance": real_bal
+            }
+        else:
+            # Si ya existe, actualizar con valores no nulos mayores a 0
+            if tv > 0:
+                user_stats[uid]["squad_val"] = tv
+            if real_bal is not None:
+                user_stats[uid]["real_balance"] = real_bal
+            if icon_url != "https://biwenger.as.com/assets/images/user.png":
+                user_stats[uid]["icon"] = icon_url
+
+    # Procesamiento del Tablón
     if isinstance(board_events, list):
         for event in board_events:
             if not isinstance(event, dict):
@@ -208,16 +237,18 @@ else:
         })
     
     df_base = pd.DataFrame(records)
+    
+    # Ordenar por Valor de Equipo descendente
+    if not df_base.empty and "Valor Equipo (€)" in df_base.columns:
+        df_base = df_base.sort_values(by="Valor Equipo (€)", ascending=False)
 
-# --- CÁLCULOS Y RENDERIZADO DE TABLA ---
-if api_success:
-    df_display = df_base.copy()
+    # Formatear números
     for col in ["Valor Equipo (€)", "Dinero en Caja (€)", "Valor Total (€)", "Puja Máxima (€)"]:
-        df_display[col] = df_display[col].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
+        df_base[col] = df_base[col].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
 
     st.write("### 👥 Auditoría Automática de Finanzas")
     st.dataframe(
-        df_display,
+        df_base,
         column_config={
             "Icono": st.column_config.ImageColumn("Icono", help="Avatar del mánager"),
             "Usuario": st.column_config.TextColumn("Usuario"),
@@ -229,24 +260,3 @@ if api_success:
         use_container_width=True,
         hide_index=True
     )
-else:
-    # Tabla editable para el modo manual
-    df_edited = st.data_editor(
-        df_base,
-        column_config={
-            "Icono": st.column_config.ImageColumn("Icono"),
-            "Usuario": st.column_config.TextColumn("Usuario"),
-            "Valor Equipo (€)": st.column_config.NumberColumn("Valor Equipo (€)", min_value=0, step=250000, format="%d €")
-        },
-        hide_index=True,
-        use_container_width=True
-    )
-    df_edited["Dinero en Caja (€)"] = initial_budget - df_edited["Valor Equipo (€)"]
-    df_edited["Valor Total (€)"] = df_edited["Dinero en Caja (€)"] + df_edited["Valor Equipo (€)"]
-    df_edited["Puja Máxima (€)"] = df_edited["Dinero en Caja (€)"] + ((max_bid_pct / 100.0) * df_edited["Valor Equipo (€)"])
-    
-    for col in ["Valor Equipo (€)", "Dinero en Caja (€)", "Valor Total (€)", "Puja Máxima (€)"]:
-        df_edited[col] = df_edited[col].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
-
-    st.write("#### 📊 Resultados Recalculados")
-    st.dataframe(df_edited, use_container_width=True, hide_index=True)
