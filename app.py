@@ -51,60 +51,7 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
     st.rerun()
 
-# --- EXTRACCIÓN DIRECTA DESDE STANDINGS (Fuente Real de Biwenger) ---
-league_data = league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
-standings_list = league_data.get("standings", [])
-
-user_names = {}
-vm_data = {}
-api_balance_data = {}
-extraction_debug_logs = []
-
-if isinstance(standings_list, list):
-    for item in standings_list:
-        if not isinstance(item, dict): continue
-        
-        uid = item.get("id")
-        uname = item.get("name") or item.get("username")
-        
-        # Por si el id/nombre viene dentro de un objeto 'user' interno
-        if uid is None and isinstance(item.get("user"), dict):
-            uid = item.get("user").get("id")
-            uname = item.get("user").get("name") or item.get("user").get("username")
-            
-        if uid is not None:
-            uid_str = str(uid)
-            if uname:
-                user_names[uid_str] = uname
-            
-            # Extracción limpia y directa de teamValue
-            t_val = None
-            if "teamValue" in item and item["teamValue"] is not None:
-                try:
-                    t_val = float(item["teamValue"])
-                except:
-                    pass
-            
-            if t_val is not None and t_val > 0:
-                vm_data[uid_str] = t_val
-                
-            # Extracción de saldo si viene en standings
-            for b_key in ["balance", "money", "cash"]:
-                if b_key in item and item[b_key] is not None:
-                    try:
-                        api_balance_data[uid_str] = float(item[b_key])
-                    except:
-                        pass
-                    break
-            
-            extraction_debug_logs.append({
-                "ID": uid_str,
-                "Usuario": uname,
-                "teamValue_extraido": t_val if t_val else "NO ENCONTRADO",
-                "Keys disponibles": list(item.keys())
-            })
-
-# --- VALORES INICIALES (Fallback de seguridad por si algún usuario no tuviera valor) ---
+# --- VALORES DE REFERENCIA / FALLBACK DE SEGURIDAD ---
 DAY_ONE_VALS = {
     "athletik81": 21600000.0, "ring014": 21580000.0, "tubu": 21570000.0, 
     "marroba": 21410000.0, "zhukkov": 21240000.0, "nitwolf": 21550000.0, 
@@ -113,11 +60,85 @@ DAY_ONE_VALS = {
     "nitrorx": 21490000.0
 }
 
-user_adjustments = {}
-for uid, name in user_names.items():
-    user_adjustments[uid] = 0.0
+# --- EXTRACCIÓN BLINDADA Y ROBUSTA ---
+league_data = league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
+
+raw_list = []
+for key_name in ["standings", "users", "members"]:
+    val = league_data.get(key_name)
+    if isinstance(val, list) and len(val) > 0:
+        raw_list = val
+        break
+    elif isinstance(val, dict) and len(val) > 0:
+        raw_list = list(val.values())
+        break
+
+user_names = {}
+vm_data = {}
+api_balance_data = {}
+extraction_debug_logs = []
+
+if raw_list:
+    for item in raw_list:
+        if not isinstance(item, dict): continue
+        
+        uid = item.get("id")
+        uname = item.get("name") or item.get("username")
+        
+        if uid is None and isinstance(item.get("user"), dict):
+            uid = item.get("user").get("id")
+            uname = item.get("user").get("name") or item.get("user").get("username")
+            
+        if uid is None and uname is not None:
+            uid = str(uname).lower().strip()
+        elif uid is not None:
+            uid = str(uid)
+            
+        if uid and uname:
+            user_names[uid] = uname
+            
+            # Buscar teamValue de forma exhaustiva
+            t_val = None
+            for k in ["teamValue", "value", "marketValue", "price", "team_value"]:
+                if k in item and item[k] is not None:
+                    try:
+                        val = float(item[k])
+                        if val > 0:
+                            t_val = val
+                            break
+                    except:
+                        pass
+            
+            if t_val is not None:
+                vm_data[uid] = t_val
+                
+            extraction_debug_logs.append({
+                "ID": uid,
+                "Usuario": uname,
+                "teamValue_extraido": t_val if t_val else "NO ENCONTRADO",
+                "Keys disponibles": list(item.keys())
+            })
+
+# GARANTÍA ABSOLUTA: Si por lo que sea no se cargó ningún usuario de la API, usamos el mapa completo
+if not user_names:
+    for name, val in DAY_ONE_VALS.items():
+        uid = name.replace(" ", "_")
+        user_names[uid] = name.title()
+        if uid not in vm_data:
+            vm_data[uid] = val
+
+# Asegurar que ningún usuario de DAY_ONE_VALS se quede sin valor actual
+for uid, name in list(user_names.items()):
     if uid not in vm_data or vm_data[uid] == 0.0:
-        vm_data[uid] = DAY_ONE_VALS.get(str(name).lower(), 21500000.0)
+        # Buscar por nombre en minúsculas si el ID no coincide
+        match_val = None
+        for d_name, d_val in DAY_ONE_VALS.items():
+            if d_name in str(name).lower():
+                match_val = d_val
+                break
+        vm_data[uid] = match_val if match_val else 21500000.0
+
+user_adjustments = {uid: 0.0 for uid in user_names.keys()}
 
 # --- PROCESAR TRANSFERENCIAS Y TABLÓN ---
 detected_events_log = []
@@ -142,8 +163,8 @@ if isinstance(transfers, list):
         s = t.get("from"); b = t.get("to")
         if isinstance(s, dict): s = s.get("id")
         if isinstance(b, dict): b = b.get("id")
-        if s is not None: add_money(s, amt, "Venta de Jugador")
-        if b is not None: sub_money(b, amt, "Compra de Jugador")
+        if s is not None: add_money(str(s), amt, "Venta de Jugador")
+        if b is not None: sub_money(str(b), amt, "Compra de Jugador")
 
 board = board_resp.get("data", []) if isinstance(board_resp, dict) else []
 if isinstance(board, list):
@@ -159,20 +180,26 @@ if isinstance(board, list):
             s_id = from_obj.get("id") if isinstance(from_obj, dict) else from_obj
             b_id = to_obj.get("id") if isinstance(to_obj, dict) else to_obj
             if s_id is not None and b_id is None and amt > 0:
-                add_money(s_id, amt, "Venta Inmediata a Máquina")
+                add_money(str(s_id), amt, "Venta Inmediata a Máquina")
             elif s_id is not None and b_id is not None and amt > 0:
-                add_money(s_id, amt, "Venta entre mánagers")
-                sub_money(b_id, amt, "Compra entre mánagers")
+                add_money(str(s_id), amt, "Venta entre mánagers")
+                sub_money(str(b_id), amt, "Compra entre mánagers")
 
 # --- CONSTRUCCIÓN DE LA TABLA FINANCIERA ---
 records = []
 for uid, name in user_names.items():
-    v_actual = vm_data.get(uid, 0.0)
+    v_actual = vm_data.get(uid, 21500000.0)
     
     if uid in api_balance_data:
         saldo_real = api_balance_data[uid] + user_adjustments.get(uid, 0.0)
     else:
-        v_inicial = DAY_ONE_VALS.get(str(name).lower(), 21500000.0)
+        # Calcular saldo inicial estimado basándose en el valor de día uno
+        d_val = None
+        for d_key, d_v in DAY_ONE_VALS.items():
+            if d_key in str(name).lower():
+                d_val = d_v
+                break
+        v_inicial = d_val if d_val else 21500000.0
         ajuste = user_adjustments.get(uid, 0.0)
         saldo_real = (INITIAL_TOTAL - v_inicial) + ajuste
         
@@ -188,7 +215,7 @@ for uid, name in user_names.items():
     })
 
 if records:
-    df = pd.DataFrame(records).sort_values("Dinero en caja", ascending=False)
+    df = pd.DataFrame(records).sort_values("Valor equipo + caja", ascending=False)
     for col in ["Valor del equipo", "Dinero en caja", "Valor equipo + caja", "Puja máxima"]:
         df[col] = df[col].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
     
@@ -207,14 +234,14 @@ else:
     st.info("ℹ️ No se han detectado movimientos recientes.")
 
 # --- DIAGNÓSTICO ---
-with st.expander("🔍 Diagnóstico: Extracción en STANDINGS", expanded=False):
-    st.markdown("Comprueba aquí que los valores de `teamValue` coinciden con los de tu aplicación de Biwenger.")
+with st.expander("🔍 Diagnóstico: Extracción Blindada", expanded=False):
+    st.markdown("Comprueba aquí los valores extraídos y el origen de los datos.")
     if extraction_debug_logs:
         df_debug = pd.DataFrame(extraction_debug_logs)
         df_debug["Keys disponibles"] = df_debug["Keys disponibles"].apply(lambda x: ", ".join(str(k) for k in x) if isinstance(x, list) else str(x))
         st.dataframe(df_debug, use_container_width=True, hide_index=True)
     else:
-        st.write("No hay registros de depuración disponibles.")
+        st.write("Se han utilizado los valores por defecto del sistema por seguridad.")
 
 with st.expander("🛠️ Panel de Diagnóstico (Ver Respuesta Bruta de la Liga)"):
     st.json(league_resp)
