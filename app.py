@@ -72,7 +72,7 @@ DAY_ONE_VALS = {
     "athletik81": 21600000.0,
     "ring014": 21580000.0,
     "tubu": 21570000.0,
-    "marroba": 215600000.0,
+    "marroba": 21560000.0,
     "zhukkov": 21560000.0,
     "nitwolf": 21550000.0,
     "yoqsetio xdxd": 21550000.0,
