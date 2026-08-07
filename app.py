@@ -51,67 +51,58 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
     st.rerun()
 
-# --- EXTRACCIÓN MEJORADA: PRIORIDAD EN STANDINGS ---
+# --- EXTRACCIÓN SOBRE USERS (Base Original Funcional) ---
+league_data = league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
+users_list = league_data.get("users", [])
+
 user_names = {}
 vm_data = {}
 api_balance_data = {}
 extraction_debug_logs = []
 
-league_data = league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
-
-# 1. BÚSQUEDA EN STANDINGS (Aquí está el valor real)
-standings = league_data.get("standings", [])
-if isinstance(standings, list):
-    for item in standings:
-        uid = str(item.get("id"))
-        uname = item.get("name") or item.get("username")
+if isinstance(users_list, list):
+    for u in users_list:
+        if not isinstance(u, dict): continue
+        uid = str(u.get("id"))
+        uname = u.get("name") or u.get("username")
         user_names[uid] = uname
         
-        # Diagnóstico de claves
         debug_info = {
             "ID": uid,
             "Usuario": uname,
-            "Claves": list(item.keys()),
-            "teamValue_encontrado": None,
-            "origen": "No encontrado"
+            "Keys del objeto u": list(u.keys()),
+            "teamValue_encontrado": "NO ENCONTRADO",
+            "origen_valor": "Ninguno (Aplicó Fallback)"
         }
         
-        # Búsqueda profunda de valor
+        # Búsqueda segura por si viniera algún campo de valor
         t_val = None
-        # Probamos campo directo o dentro de 'team'
-        team_obj = item.get("team") if isinstance(item.get("team"), dict) else {}
-        
-        # Combinamos el objeto actual y el objeto 'team' para buscar
-        search_space = {**item, **team_obj}
-        
         for key in ["teamValue", "value", "marketValue", "price"]:
-            if key in search_space and search_space[key] is not None:
+            if key in u and u[key] is not None:
                 try:
-                    val = float(search_space[key])
+                    val = float(u[key])
                     if val > 0:
                         t_val = val
                         debug_info["teamValue_encontrado"] = t_val
-                        debug_info["origen"] = f"Buscado en: {key}"
+                        debug_info["origen_valor"] = f"Encontrado en '{key}'"
                         break
                 except:
                     pass
         
         if t_val:
             vm_data[uid] = t_val
-        
-        extraction_debug_logs.append(debug_info)
-
-# 2. BÚSQUEDA DE SALDO EN USERS (Como fallback)
-users_list = league_data.get("users", [])
-if isinstance(users_list, list):
-    for u in users_list:
-        uid = str(u.get("id"))
+            
         for b_key in ["balance", "money", "cash"]:
             if b_key in u:
-                api_balance_data[uid] = float(u[b_key])
+                try:
+                    api_balance_data[uid] = float(u[b_key])
+                except:
+                    pass
                 break
+                
+        extraction_debug_logs.append(debug_info)
 
-# --- RESTO DEL SCRIPT (Lógica Financiera igual) ---
+# --- VALORES INICIALES (Fallback Garantizado) ---
 DAY_ONE_VALS = {
     "athletik81": 21600000.0, "ring014": 21580000.0, "tubu": 21570000.0, 
     "marroba": 21560000.0, "zhukkov": 21560000.0, "nitwolf": 21550000.0, 
@@ -213,11 +204,13 @@ if detected_events_log:
 else:
     st.info("ℹ️ No se han detectado movimientos recientes.")
 
-# --- DIAGNÓSTICO CORREGIDO: Ahora mira en STANDINGS ---
-with st.expander("🔍 Diagnóstico: Extracción de Valores en STANDINGS (Ahora corregido)", expanded=True):
-    st.markdown("Este panel analiza la lista **standings**. Si aquí ves valores, el monitor funcionará correctamente.")
+# --- DIAGNÓSTICO ORIGINAL ---
+with st.expander("🔍 Diagnóstico Detallado de Extracción de Valores", expanded=False):
+    st.markdown("Este panel muestra qué estructura y claves ha encontrado el script para cada usuario en la respuesta de la API.")
     if extraction_debug_logs:
-        st.dataframe(pd.DataFrame(extraction_debug_logs), use_container_width=True)
+        df_debug = pd.DataFrame(extraction_debug_logs)
+        df_debug["Keys del objeto u"] = df_debug["Keys del objeto u"].apply(lambda x: ", ".join(x) if isinstance(x, list) else str(x))
+        st.dataframe(df_debug, use_container_width=True, hide_index=True)
     else:
         st.write("No hay registros de depuración disponibles.")
 
