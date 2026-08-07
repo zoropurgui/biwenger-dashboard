@@ -61,32 +61,33 @@ if st.sidebar.button("🔄 Recargar Datos"):
 
 # --- EXTRACCIÓN DIRECTA DESDE 'standings' (JSON OFICIAL) ---
 league_data = league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
-standings_list = league_data.get("standings", [])
+standings = league_data.get("standings", [])
 
-user_adjustments = {}
 user_names = {}
 vm_data = {}
+user_adjustments = {}
 
-if isinstance(standings_list, list) and len(standings_list) > 0:
-    for s in standings_list:
-        if not isinstance(s, dict):
-            continue
-        uid = str(s.get("id"))
-        uname = s.get("name", f"Usuario {uid}")
-        team_val = float(s.get("teamValue", 0) or 0)
-        
-        user_adjustments[uid] = 0.0
-        user_names[uid] = uname
-        vm_data[uid] = team_val
-else:
-    # Respaldo por seguridad si no viniera en standings
+if isinstance(standings, list):
+    for s in standings:
+        if isinstance(s, dict):
+            uid = s.get("id")
+            name = s.get("name")
+            team_value = s.get("teamValue")
+            if uid is not None and name:
+                uid_str = str(uid)
+                user_names[uid_str] = name
+                vm_data[uid_str] = float(team_value) if team_value is not None else DAY_ONE_VALS.get(name.lower(), 21500000.0)
+                user_adjustments[uid_str] = 0.0
+
+# Respaldo por seguridad si standings estuviera vacío
+if not user_names:
     for idx, (name_key, def_val) in enumerate(DAY_ONE_VALS.items()):
         uid = str(1000 + idx)
         user_adjustments[uid] = 0.0
         user_names[uid] = name_key.title()
         vm_data[uid] = def_val
 
-# --- PROCESAR TRANSFERENCIAS Y TABLÓN (LÓGICA INTACTA Y FUNCIONAL) ---
+# --- PROCESAR TRANSFERENCIAS Y TABLÓN ---
 detected_events_log = []
 
 def add_money(uid, amt, desc):
@@ -169,5 +170,5 @@ if detected_events_log:
 else:
     st.info("ℹ️ No se han detectado movimientos recientes.")
 
-with st.expander("🛠️ Panel de Diagnóstico (Ver Standings Extraídos)"):
-    st.json(standings_list)
+with st.expander("🛠️ Panel de Diagnóstico (Ver Standings)"):
+    st.json(standings)
