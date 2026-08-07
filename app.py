@@ -51,97 +51,67 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
     st.rerun()
 
-# --- EXTRACCIÓN Y REGISTRO DE DIAGNÓSTICO (VERSIÓN ORIGINAL SOLICITADA) ---
+# --- EXTRACCIÓN MEJORADA: PRIORIDAD EN STANDINGS ---
 user_names = {}
 vm_data = {}
 api_balance_data = {}
-extraction_debug_logs = []  # Lista para guardar el diagnóstico exacto por usuario
+extraction_debug_logs = []
 
 league_data = league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
-users_list = league_data.get("users", [])
 
-if isinstance(users_list, list):
-    for u in users_list:
-        if not isinstance(u, dict):
-            continue
-        uid = u.get("id") or u.get("user") or u.get("userId")
-        uname = u.get("name") or u.get("username")
+# 1. BÚSQUEDA EN STANDINGS (Aquí está el valor real)
+standings = league_data.get("standings", [])
+if isinstance(standings, list):
+    for item in standings:
+        uid = str(item.get("id"))
+        uname = item.get("name") or item.get("username")
+        user_names[uid] = uname
         
+        # Diagnóstico de claves
         debug_info = {
             "ID": uid,
             "Usuario": uname,
-            "Keys del objeto u": list(u.keys()),
+            "Claves": list(item.keys()),
             "teamValue_encontrado": None,
-            "origen_valor": "Ninguno (Aplicó Fallback)"
+            "origen": "No encontrado"
         }
         
-        if uid is not None and uname:
-            uid_str = str(uid)
-            user_names[uid_str] = uname
-            
-            t_val = None
-            # 1. Claves directas
-            for key in ["teamValue", "value", "marketValue", "team_value", "price"]:
-                if key in u and u[key] is not None:
-                    try:
-                        v = float(u[key])
-                        if v > 0:
-                            t_val = v
-                            debug_info["origen_valor"] = f"Clave directa: {key}"
-                            break
-                    except:
-                        pass
-            
-            # 2. Objetos anidados
-            if t_val is None:
-                for sub_key in ["team", "account", "profile"]:
-                    sub_obj = u.get(sub_key)
-                    if isinstance(sub_obj, dict):
-                        debug_info[f"keys_{sub_key}"] = list(sub_obj.keys())
-                        for key in ["teamValue", "value", "marketValue", "price"]:
-                            if key in sub_obj and sub_obj[key] is not None:
-                                try:
-                                    v = float(sub_obj[key])
-                                    if v > 0:
-                                        t_val = v
-                                        debug_info["origen_valor"] = f"Anidado en '{sub_key}': {key}"
-                                        break
-                                except:
-                                    pass
-                        if t_val is not None:
-                            break
-            
-            # 3. Sumar plantilla
-            if t_val is None:
-                for squad_key in ["players", "squad", "team"]:
-                    squad = u.get(squad_key)
-                    if isinstance(squad, list):
-                        calc_val = 0.0
-                        for p in squad:
-                            if isinstance(p, dict):
-                                p_val = p.get("price") or p.get("value") or p.get("marketValue") or 0
-                                calc_val += float(p_val)
-                        if calc_val > 0:
-                            t_val = calc_val
-                            debug_info["origen_valor"] = f"Suma de plantilla ({squad_key})"
-                            break
-            
-            if t_val is not None:
-                vm_data[uid_str] = t_val
-                debug_info["teamValue_encontrado"] = t_val
-            else:
-                debug_info["teamValue_encontrado"] = "NO ENCONTRADO"
-
-            for b_key in ["balance", "money", "cash"]:
-                if b_key in u and u[b_key] is not None:
-                    try:
-                        api_balance_data[uid_str] = float(u[b_key])
+        # Búsqueda profunda de valor
+        t_val = None
+        # Probamos campo directo o dentro de 'team'
+        team_obj = item.get("team") if isinstance(item.get("team"), dict) else {}
+        
+        # Combinamos el objeto actual y el objeto 'team' para buscar
+        search_space = {**item, **team_obj}
+        
+        for key in ["teamValue", "value", "marketValue", "price"]:
+            if key in search_space and search_space[key] is not None:
+                try:
+                    val = float(search_space[key])
+                    if val > 0:
+                        t_val = val
+                        debug_info["teamValue_encontrado"] = t_val
+                        debug_info["origen"] = f"Buscado en: {key}"
                         break
-                    except:
-                        pass
+                except:
+                    pass
+        
+        if t_val:
+            vm_data[uid] = t_val
         
         extraction_debug_logs.append(debug_info)
 
+# 2. BÚSQUEDA DE SALDO EN USERS (Como fallback)
+users_list = league_data.get("users", [])
+if isinstance(users_list, list):
+    for u in users_list:
+        uid = str(u.get("id"))
+        for b_key in ["balance", "money", "cash"]:
+            if b_key in u:
+                api_balance_data[uid] = float(u[b_key])
+                break
+
+# --- RESTO DEL SCRIPT (Lógica Financiera igual) ---
 DAY_ONE_VALS = {
     "athletik81": 21600000.0, "ring014": 21580000.0, "tubu": 21570000.0, 
     "marroba": 21560000.0, "zhukkov": 21560000.0, "nitwolf": 21550000.0, 
@@ -243,9 +213,9 @@ if detected_events_log:
 else:
     st.info("ℹ️ No se han detectado movimientos recientes.")
 
-# --- PANEL DE DIAGNÓSTICO DETALLADO (SOLICITADO) ---
-with st.expander("🔍 Diagnóstico Detallado de Extracción de Valores", expanded=True):
-    st.markdown("Este panel muestra qué estructura y claves ha encontrado el script para cada usuario en la respuesta de la API.")
+# --- DIAGNÓSTICO CORREGIDO: Ahora mira en STANDINGS ---
+with st.expander("🔍 Diagnóstico: Extracción de Valores en STANDINGS (Ahora corregido)", expanded=True):
+    st.markdown("Este panel analiza la lista **standings**. Si aquí ves valores, el monitor funcionará correctamente.")
     if extraction_debug_logs:
         st.dataframe(pd.DataFrame(extraction_debug_logs), use_container_width=True)
     else:
