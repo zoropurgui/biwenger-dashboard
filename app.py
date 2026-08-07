@@ -59,53 +59,72 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
     st.rerun()
 
-# --- EXTRACCIÓN ROBUSTA EN CASCADA ---
-standings = []
-if isinstance(league_resp, list):
-    standings = league_resp
-elif isinstance(league_resp, dict):
-    data_field = league_resp.get("data")
-    if isinstance(data_field, list):
-        standings = data_field
-    elif isinstance(data_field, dict):
-        standings = data_field.get("standings", data_field.get("users", []))
-    else:
-        standings = league_resp.get("standings", league_resp.get("users", []))
+# --- BUSCADOR RECURSIVO INTELIGENTE DE STANDINGS ---
+standings_list = []
+def find_standings(obj):
+    if isinstance(obj, list):
+        if obj and isinstance(obj[0], dict) and ("teamValue" in obj[0] or "name" in obj[0]):
+            return obj
+        for item in obj:
+            res = find_standings(item)
+            if res: return res
+    elif isinstance(obj, dict):
+        for k, v in obj.items():
+            if k in ["standings", "users", "members"] and isinstance(v, list):
+                if v and isinstance(v[0], dict) and ("teamValue" in v[0] or "name" in v[0]):
+                    return v
+            res = find_standings(v)
+            if res: return res
+    return []
+
+standings_list = find_standings(league_resp)
 
 user_adjustments = {}
 user_names = {}
 vm_data = {}
 
-for item in standings:
+for item in standings_list:
     if isinstance(item, dict):
-        uid = item.get("id")
-        uname = item.get("name", "Desconocido")
-        team_val = float(item.get("teamValue", 0) or item.get("value", 0) or 0)
-        if uid:
+        raw_uid = item.get("id") or item.get("user") or item.get("userId")
+        if raw_uid is not None:
+            uid = str(raw_uid)
+            uname = item.get("name") or item.get("username") or "Desconocido"
+            
+            team_val = 0.0
+            for k in ["teamValue", "value", "team_value", "vm"]:
+                if k in item and item[k] is not None:
+                    try:
+                        team_val = float(item[k])
+                        break
+                    except:
+                        pass
+            
             user_adjustments[uid] = 0.0
             user_names[uid] = uname
             vm_data[uid] = team_val
 
-# Fallback por seguridad si la estructura viniera vacía
+# Fallback por seguridad si no encontrara usuarios
 if not user_names:
     for idx, (name_key, def_val) in enumerate(DAY_ONE_VALS.items()):
-        uid = 1000 + idx
+        uid = str(1000 + idx)
         user_adjustments[uid] = 0.0
         user_names[uid] = name_key.title()
         vm_data[uid] = def_val
 
-# Procesar transferencias y tablón
+# Procesar transferencias y tablón con IDs en string
 detected_events_log = []
 
 def add_money(uid, amt, desc):
-    if uid in user_adjustments and amt > 0:
-        user_adjustments[uid] += amt
-        detected_events_log.append({"Usuario": user_names.get(uid, str(uid)), "Importe (€)": amt, "Descripción": desc})
+    uid_str = str(uid)
+    if uid_str in user_adjustments and amt > 0:
+        user_adjustments[uid_str] += amt
+        detected_events_log.append({"Usuario": user_names.get(uid_str, uid_str), "Importe (€)": amt, "Descripción": desc})
 
 def sub_money(uid, amt, desc):
-    if uid in user_adjustments and amt > 0:
-        user_adjustments[uid] -= amt
-        detected_events_log.append({"Usuario": user_names.get(uid, str(uid)), "Importe (€)": -amt, "Descripción": desc})
+    uid_str = str(uid)
+    if uid_str in user_adjustments and amt > 0:
+        user_adjustments[uid_str] -= amt
+        detected_events_log.append({"Usuario": user_names.get(uid_str, uid_str), "Importe (€)": -amt, "Descripción": desc})
 
 transfers = transfers_resp.get("data", []) if isinstance(transfers_resp, dict) else []
 if isinstance(transfers, list):
@@ -115,8 +134,8 @@ if isinstance(transfers, list):
         s = t.get("from"); b = t.get("to")
         if isinstance(s, dict): s = s.get("id")
         if isinstance(b, dict): b = b.get("id")
-        if s: add_money(int(s), amt, "Venta de Jugador")
-        if b: sub_money(int(b), amt, "Compra de Jugador")
+        if s is not None: add_money(s, amt, "Venta de Jugador")
+        if b is not None: sub_money(b, amt, "Compra de Jugador")
 
 board = board_resp.get("data", []) if isinstance(board_resp, dict) else []
 if isinstance(board, list):
@@ -131,11 +150,11 @@ if isinstance(board, list):
             to_obj = el.get("to")
             s_id = from_obj.get("id") if isinstance(from_obj, dict) else from_obj
             b_id = to_obj.get("id") if isinstance(to_obj, dict) else to_obj
-            if s_id and not b_id and amt > 0:
-                add_money(int(s_id), amt, "Venta Inmediata a Máquina")
-            elif s_id and b_id and amt > 0:
-                add_money(int(s_id), amt, "Venta entre mánagers")
-                sub_money(int(b_id), amt, "Compra entre mánagers")
+            if s_id is not None and b_id is None and amt > 0:
+                add_money(s_id, amt, "Venta Inmediata a Máquina")
+            elif s_id is not None and b_id is not None and amt > 0:
+                add_money(s_id, amt, "Venta entre mánagers")
+                sub_money(b_id, amt, "Compra entre mánagers")
 
 # Construcción de la tabla financiera
 records = []
@@ -175,5 +194,5 @@ if detected_events_log:
 else:
     st.info("ℹ️ No se han detectado movimientos recientes.")
 
-with st.expander("🛠️ Panel de Diagnóstico (Ver Respuesta Completa de la Liga)"):
-    st.json(league_resp)
+with st.expander("🛠️ Panel de Diagnóstico (Ver Standings Detectados)"):
+    st.json(standings_list)
