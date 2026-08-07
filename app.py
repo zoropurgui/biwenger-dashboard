@@ -59,84 +59,73 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
     st.rerun()
 
-# --- EXTRACCIÓN ROBUSTA DE USUARIOS Y VALORES ---
-def extract_users_from_json(data):
-    users = []
-    if isinstance(data, list):
-        for item in data:
-            if isinstance(item, dict) and ("id" in item or "name" in item):
-                users.append(item)
-    elif isinstance(data, dict):
-        for key in ["users", "standings", "members", "data", "ranking", "participants"]:
-            val = data.get(key)
-            if val is not None:
-                res = extract_users_from_json(val)
-                if res:
-                    return res
-        for k, v in data.items():
-            res = extract_users_from_json(v)
-            if res:
-                return res
-    return users
+# --- EXTRACCIÓN OFICIAL Y DIRECTA DE DATOS DE LA LIGA ---
+league_data = league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
 
-standings_list = extract_users_from_json(league_resp)
+# 1. Mapeo de Nombres de Usuarios
+names_map = {}
+users_list = league_data.get("users", [])
+if isinstance(users_list, list):
+    for u in users_list:
+        if isinstance(u, dict):
+            uid = u.get("id")
+            uname = u.get("name") or u.get("username")
+            if uid is not None and uname:
+                names_map[str(uid)] = uname
+elif isinstance(users_list, dict):
+    for uid, u in users_list.items():
+        if isinstance(u, dict):
+            uname = u.get("name") or u.get("username")
+            if uname:
+                names_map[str(uid)] = uname
+
+# 2. Mapeo de Valores de Equipo Actuales (Standings)
+vm_map = {}
+standings_list = league_data.get("standings", [])
+if isinstance(standings_list, list):
+    for s in standings_list:
+        if isinstance(s, dict):
+            uid = s.get("id") or s.get("user")
+            if isinstance(uid, dict):
+                uid = uid.get("id")
+            val = s.get("value") or s.get("teamValue") or 0.0
+            if uid is not None:
+                try:
+                    vm_map[str(uid)] = float(val)
+                except:
+                    pass
+
+# Respaldo en usuarios si no se obtuvieron en standings
+if not vm_map and isinstance(users_list, list):
+    for u in users_list:
+        if isinstance(u, dict):
+            uid = u.get("id")
+            val = u.get("value") or u.get("teamValue") or 0.0
+            if uid is not None:
+                try:
+                    vm_map[str(uid)] = float(val)
+                except:
+                    pass
 
 user_adjustments = {}
 user_names = {}
 vm_data = {}
 
-for item in standings_list:
-    if not isinstance(item, dict):
-        continue
-    
-    raw_uid = item.get("id") or item.get("user") or item.get("userId") or item.get("user_id")
-    if isinstance(raw_uid, dict):
-        raw_uid = raw_uid.get("id")
-    if raw_uid is None:
-        continue
-    uid = str(raw_uid)
-    
-    uname = item.get("name") or item.get("username") or item.get("slug") or f"Usuario {uid}"
-    
-    # Búsqueda exhaustiva del valor del equipo (incluyendo el objeto anidado 'team')
-    team_val = 0.0
-    
-    # 1. Buscar en claves directas
-    for k in ["teamValue", "value", "team_value", "vm", "totalValue", "team_price"]:
-        if k in item and item[k] is not None:
-            try:
-                val = float(item[k])
-                if val > 0:
-                    team_val = val
-                    break
-            except:
-                pass
-                
-    # 2. Buscar dentro de objetos anidados (como 'team', 'account', etc.)
-    if team_val == 0.0:
-        for sub_key in ["team", "account", "user", "profile"]:
-            sub_obj = item.get(sub_key)
-            if isinstance(sub_obj, dict):
-                for k in ["teamValue", "value", "team_value", "vm", "totalValue", "marketValue", "price"]:
-                    if k in sub_obj and sub_obj[k] is not None:
-                        try:
-                            val = float(sub_obj[k])
-                            if val > 0:
-                                team_val = val
-                                break
-                        except:
-                            pass
-                if team_val > 0:
-                    break
+all_uids = set(names_map.keys()).union(set(vm_map.keys()))
 
-    # 3. Respaldo por defecto si no se encuentra
+for uid in all_uids:
+    uname = names_map.get(uid, f"Usuario {uid}")
+    team_val = vm_map.get(uid, 0.0)
+    
+    # Fallback individual al día 1 si viniera a 0
     if team_val == 0.0:
         team_val = DAY_ONE_VALS.get(uname.lower(), 21500000.0)
-
+        
     user_adjustments[uid] = 0.0
     user_names[uid] = uname
     vm_data[uid] = team_val
 
+# Fallback global por seguridad si la API estuviera vacía
 if not user_names:
     for idx, (name_key, def_val) in enumerate(DAY_ONE_VALS.items()):
         uid = str(1000 + idx)
@@ -144,7 +133,7 @@ if not user_names:
         user_names[uid] = name_key.title()
         vm_data[uid] = def_val
 
-# Procesar transferencias y tablón (Lógica intacta y funcional)
+# --- PROCESAR TRANSFERENCIAS Y TABLÓN (LÓGICA INTACTA Y FUNCIONAL) ---
 detected_events_log = []
 
 def add_money(uid, amt, desc):
@@ -189,7 +178,7 @@ if isinstance(board, list):
                 add_money(s_id, amt, "Venta entre mánagers")
                 sub_money(b_id, amt, "Compra entre mánagers")
 
-# Construcción de la tabla financiera
+# --- CONSTRUCCIÓN DE LA TABLA FINANCIERA ---
 records = []
 for uid, name in user_names.items():
     v_actual = vm_data.get(uid, 0.0)
@@ -227,5 +216,5 @@ if detected_events_log:
 else:
     st.info("ℹ️ No se han detectado movimientos recientes.")
 
-with st.expander("🛠️ Panel de Diagnóstico (Ver Standings Detectados)"):
-    st.json(standings_list)
+with st.expander("🛠️ Panel de Diagnóstico (Ver Respuesta Bruta de la Liga)"):
+    st.json(league_resp)
