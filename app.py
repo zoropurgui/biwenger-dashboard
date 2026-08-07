@@ -197,9 +197,10 @@ if isinstance(board, list):
 records = []
 for uid, name in user_names.items():
     v_actual = vm_data.get(uid, 21500000.0)
+    ajuste = user_adjustments.get(uid, 0.0)
     
     if uid in api_balance_data:
-        saldo_real = api_balance_data[uid] + user_adjustments.get(uid, 0.0)
+        saldo_real = api_balance_data[uid] + ajuste
     else:
         d_val = None
         for d_key, d_v in DAY_ONE_VALS.items():
@@ -207,7 +208,6 @@ for uid, name in user_names.items():
                 d_val = d_v
                 break
         v_inicial = d_val if d_val else 21500000.0
-        ajuste = user_adjustments.get(uid, 0.0)
         saldo_real = (INITIAL_TOTAL - v_inicial) + ajuste
         
     valor_total_caja = v_actual + saldo_real
@@ -217,13 +217,14 @@ for uid, name in user_names.items():
         "Usuario": name,
         "Valor del equipo": v_actual,
         "Dinero en caja": saldo_real,
+        "Balance": ajuste,
         "Valor equipo + caja": valor_total_caja,
         "Puja máxima": puja_max
     })
 
 if records:
     df = pd.DataFrame(records).sort_values("Valor equipo + caja", ascending=False)
-    for col in ["Valor del equipo", "Dinero en caja", "Valor equipo + caja", "Puja máxima"]:
+    for col in ["Valor del equipo", "Dinero en caja", "Balance", "Valor equipo + caja", "Puja máxima"]:
         df[col] = df[col].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
     
     st.subheader("📊 Monitor Financiero en Directo")
