@@ -59,19 +59,19 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
     st.rerun()
 
-# --- EXTRACCIÓN DIRECTA Y LIMPIA DESDE 'standings' (ESTRUCTURA OFICIAL DE LA API) ---
+# --- EXTRACCIÓN DIRECTA Y PRECISA DESDE 'users' (API BIWENGER V2) ---
 user_names = {}
 vm_data = {}
 
 league_data = league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
-standings_list = league_data.get("standings", [])
+users_list = league_data.get("users", [])
 
-if isinstance(standings_list, list) and len(standings_list) > 0:
-    for s in standings_list:
-        if isinstance(s, dict):
-            uid = s.get("id")
-            uname = s.get("name")
-            team_val = s.get("teamValue")
+if isinstance(users_list, list) and len(users_list) > 0:
+    for u in users_list:
+        if isinstance(u, dict):
+            uid = u.get("id")
+            uname = u.get("name")
+            team_val = u.get("teamValue")
             
             if uid is not None and uname:
                 uid_str = str(uid)
@@ -82,57 +82,12 @@ if isinstance(standings_list, list) and len(standings_list) > 0:
                     except:
                         pass
 
-# Respaldo recursivo por seguridad por si la estructura variase en algún momento
+# Respaldo por seguridad si 'users' estuviera vacío
 if not user_names:
-    def extract_from_node(node):
-        if isinstance(node, dict):
-            uid = node.get("id") or node.get("user") or node.get("userId")
-            if isinstance(uid, dict):
-                uid = uid.get("id")
-            
-            uname = node.get("name") or node.get("username") or node.get("slug")
-            
-            val = None
-            for k in ["value", "teamValue", "marketValue", "team_value"]:
-                if k in node and node[k] is not None:
-                    try:
-                        v = float(node[k])
-                        if v > 100000:
-                            val = v
-                            break
-                    except:
-                        pass
-            
-            if val is None:
-                for sub in ["team", "account", "profile"]:
-                    sub_obj = node.get(sub)
-                    if isinstance(sub_obj, dict):
-                        for k in ["value", "teamValue", "marketValue", "price"]:
-                            if k in sub_obj and sub_obj[k] is not None:
-                                try:
-                                    v = float(sub_obj[k])
-                                    if v > 100000:
-                                        val = v
-                                        break
-                                except:
-                                    pass
-                        if val is not None:
-                            break
-
-            if uid is not None:
-                uid_str = str(uid)
-                if uname and (uid_str not in user_names or len(str(user_names[uid_str])) < len(str(uname))):
-                    user_names[uid_str] = uname
-                if val is not None and val > 100000:
-                    vm_data[uid_str] = val
-
-            for v in node.values():
-                extract_from_node(v)
-        elif isinstance(node, list):
-            for item in node:
-                extract_from_node(item)
-
-    extract_from_node(league_resp)
+    for idx, (name_key, def_val) in enumerate(DAY_ONE_VALS.items()):
+        uid = str(1000 + idx)
+        user_names[uid] = name_key.title()
+        vm_data[uid] = def_val
 
 user_adjustments = {}
 for uid in user_names.keys():
@@ -140,13 +95,6 @@ for uid in user_names.keys():
     if uid not in vm_data or vm_data[uid] == 0.0:
         uname = user_names[uid]
         vm_data[uid] = DAY_ONE_VALS.get(str(uname).lower(), 21500000.0)
-
-if not user_names:
-    for idx, (name_key, def_val) in enumerate(DAY_ONE_VALS.items()):
-        uid = str(1000 + idx)
-        user_adjustments[uid] = 0.0
-        user_names[uid] = name_key.title()
-        vm_data[uid] = def_val
 
 # --- PROCESAR TRANSFERENCIAS Y TABLÓN (LÓGICA INTACTA Y FUNCIONAL) ---
 detected_events_log = []
