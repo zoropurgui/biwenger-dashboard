@@ -54,8 +54,8 @@ if st.sidebar.button("🔄 Recargar Datos"):
 # --- VALORES DE REFERENCIA / FALLBACK DE SEGURIDAD ---
 DAY_ONE_VALS = {
     "athletik81": 21600000.0, "ring014": 21580000.0, "tubu": 21570000.0, 
-    "marroba": 21410000.0, "zhukkov": 21240000.0, "nitwolf": 21550000.0, 
-    "yoqsetio xdxd": 21870000.0, "nistalikus": 21550000.0, "moltisanti": 21540000.0, 
+    "marroba": 21410000.0, "zhukkov": 21560000.0, "nitwolf": 21550000.0, 
+    "yoqsetio xdxd": 21550000.0, "nistalikus": 21550000.0, "moltisanti": 21540000.0, 
     "gran gravessen": 21540000.0, "zoropurgui": 21530000.0, "_caesar_": 21510000.0, 
     "nitrorx": 21490000.0
 }
@@ -190,7 +190,7 @@ for uid, name in user_names.items():
     v_actual = vm_data.get(uid, 21500000.0)
     
     if uid in api_balance_data:
-        saldo_real = api_balance_data[uid] - user_adjustments.get(uid, 0.0)
+        saldo_real = api_balance_data[uid] + user_adjustments.get(uid, 0.0)
     else:
         # Calcular saldo inicial estimado basándose en el valor de día uno
         d_val = None
@@ -200,7 +200,7 @@ for uid, name in user_names.items():
                 break
         v_inicial = d_val if d_val else 21500000.0
         ajuste = user_adjustments.get(uid, 0.0)
-        saldo_real = (INITIAL_TOTAL - v_inicial) - ajuste  # <-- AQUÍ SE HA CAMBIADO EL SIGNO
+        saldo_real = (INITIAL_TOTAL - v_inicial) + ajuste
         
     valor_total_caja = v_actual + saldo_real
     puja_max = saldo_real + ((max_bid_pct / 100.0) * v_actual)
