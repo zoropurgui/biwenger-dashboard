@@ -53,10 +53,18 @@ if st.sidebar.button("🔄 Recargar Datos"):
 
 # --- VALORES DE REFERENCIA / FALLBACK DE SEGURIDAD ---
 DAY_ONE_VALS = {
-    "athletik81": 21600000.0, "ring014": 21580000.0, "tubu": 21570000.0, 
-    "marroba": 21410000.0, "zhukkov": 21560000.0, "nitwolf": 21550000.0, 
-    "yoqsetio xdxd": 21550000.0, "nistalikus": 21550000.0, "moltisanti": 21540000.0, 
-    "gran gravessen": 21540000.0, "zoropurgui": 21530000.0, "_caesar_": 21510000.0, 
+    "athletik81": 21600000.0, 
+    "ring014": 21580000.0, 
+    "tubu": 21570000.0, 
+    "marroba": 21485000.0,      # Ajustado exacto para 18.515.000 € en caja
+    "zhukkov": 21280000.0,      # Ajustado exacto para 18.720.000 € en caja
+    "nitwolf": 21550000.0, 
+    "yoqsetio xdxd": 21830000.0, # Ajustado exacto para 18.170.000 € en caja
+    "nistalikus": 21550000.0, 
+    "moltisanti": 21540000.0, 
+    "gran gravessen": 21540000.0, 
+    "zoropurgui": 21530000.0, 
+    "_caesar_": 21510000.0, 
     "nitrorx": 21490000.0
 }
 
