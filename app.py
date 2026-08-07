@@ -51,12 +51,11 @@ if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
     st.rerun()
 
-# --- PETICIONES A LA API CON LA RUTA CORRECTA DE LA LIGA ---
+# --- PETICIONES A LA API ---
 headers = {"Authorization": f"Bearer {clean_token}", "X-League": str(l_id), "X-User": str(u_id), "X-App-Version": "2.0.0"}
 
 @st.cache_data(ttl=5)
 def get_all_data(league_id):
-    # ¡AQUÍ ESTABA EL FALLO! Las URLs ahora incluyen el ID de la liga en el path
     url_league = f"https://biwenger.as.com/api/v2/league/{league_id}"
     url_transfers = f"https://biwenger.as.com/api/v2/league/{league_id}/transfers?limit=50"
     url_board = f"https://biwenger.as.com/api/v2/league/{league_id}/board?limit=50"
@@ -67,11 +66,11 @@ def get_all_data(league_id):
     return r_users, r_transfers, r_board
 
 users_resp, transfers_resp, board_resp = get_all_data(l_id)
-
 users_data = users_resp.get("data", {}).get("users", [])
 transfers = transfers_resp.get("data", [])
 board = board_resp.get("data", [])
 
+# --- LÓGICA DE CÁLCULO ---
 user_adjustments = {u.get("id"): 0.0 for u in users_data}
 user_names = {u.get("id"): u.get("name") for u in users_data}
 detected_events_log = []
@@ -79,53 +78,32 @@ detected_events_log = []
 def add_money(user_id, amount, desc):
     if user_id in user_adjustments and amount > 0:
         user_adjustments[user_id] += amount
-        detected_events_log.append({
-            "Usuario": user_names.get(user_id, str(user_id)),
-            "Importe (€)": amount,
-            "Descripción": desc
-        })
+        detected_events_log.append({"Usuario": user_names.get(user_id, str(user_id)), "Importe (€)": amount, "Descripción": desc})
 
 def sub_money(user_id, amount, desc):
     if user_id in user_adjustments and amount > 0:
         user_adjustments[user_id] -= amount
-        detected_events_log.append({
-            "Usuario": user_names.get(user_id, str(user_id)),
-            "Importe (€)": -amount,
-            "Descripción": desc
-        })
+        detected_events_log.append({"Usuario": user_names.get(user_id, str(user_id)), "Importe (€)": -amount, "Descripción": desc})
 
-# 1. Procesar transferencias formales
 for t in transfers:
     if not isinstance(t, dict): continue
     amt = float(t.get("amount", 0) or t.get("price", 0) or 0)
-    
-    seller = t.get("from")
-    if isinstance(seller, dict): seller = seller.get("id")
-    
-    buyer = t.get("to")
-    if isinstance(buyer, dict): buyer = buyer.get("id")
-    
-    if seller: add_money(int(seller), amt, "Venta")
-    if buyer: sub_money(int(buyer), amt, "Compra")
+    s = t.get("from"); b = t.get("to")
+    if isinstance(s, dict): s = s.get("id")
+    if isinstance(b, dict): b = b.get("id")
+    if s: add_money(int(s), amt, "Venta")
+    if b: sub_money(int(b), amt, "Compra")
 
-# 2. Procesar el Tablón (Feed) incluyendo 'immediateSale'
 for item in board:
     if not isinstance(item, dict): continue
     content = item.get("content")
     elements = content if isinstance(content, list) else [content]
-    
     for el in elements:
         if not isinstance(el, dict): continue
         amt = float(el.get("amount", 0) or el.get("price", 0) or el.get("value", 0) or 0)
-        
-        from_obj = el.get("from")
-        to_obj = el.get("to")
-        
-        s_id = from_obj.get("id") if isinstance(from_obj, dict) else from_obj
-        b_id = to_obj.get("id") if isinstance(to_obj, dict) else to_obj
-        
-        if s_id and not b_id and amt > 0:
-            add_money(int(s_id), amt, "Venta Inmediata a Máquina")
+        s_id = el.get("from").get("id") if isinstance(el.get("from"), dict) else el.get("from")
+        b_id = el.get("to").get("id") if isinstance(el.get("to"), dict) else el.get("to")
+        if s_id and not b_id and amt > 0: add_money(int(s_id), amt, "Venta Inmediata")
         elif s_id and b_id and amt > 0:
             add_money(int(s_id), amt, "Venta entre mánagers")
             sub_money(int(b_id), amt, "Compra entre mánagers")
@@ -136,31 +114,38 @@ for u in users_data:
     u_id = u.get("id")
     name = str(u.get("name", "Desconocido")).lower()
     
+    # Intento de obtener Valor Equipo: prueba con teamValue, si falla busca alternativas
+    v_actual = float(u.get("teamValue") or u.get("value") or 0)
+    
     v_inicial = DAY_ONE_VALS.get(name, 21500000.0)
     ajuste = user_adjustments.get(u_id, 0.0)
     
     saldo_real = (INITIAL_TOTAL - v_inicial) + ajuste
-    v_actual = float(u.get("teamValue", 0) or 0)
+    valor_total_caja = v_actual + saldo_real
     puja_max = saldo_real + ((max_bid_pct / 100.0) * v_actual)
     
     records.append({
         "Usuario": u.get("name"),
-        "💸 Saldo Real en Caja": saldo_real,
-        "🔄 Ajuste Detectado": ajuste,
-        "🔥 Puja Máxima Real": puja_max
+        "Valor del equipo": v_actual,
+        "Dinero en caja": saldo_real,
+        "Valor equipo + caja": valor_total_caja,
+        "Puja máxima": puja_max
     })
 
-df = pd.DataFrame(records).sort_values("💸 Saldo Real en Caja", ascending=False)
-for col in ["💸 Saldo Real en Caja", "🔄 Ajuste Detectado", "🔥 Puja Máxima Real"]:
+df = pd.DataFrame(records).sort_values("Dinero en caja", ascending=False)
+
+# Formateo visual
+for col in ["Valor del equipo", "Dinero en caja", "Valor equipo + caja", "Puja máxima"]:
     df[col] = df[col].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
 
 st.subheader("📊 Monitor Financiero en Directo")
 st.dataframe(df, use_container_width=True, hide_index=True)
 
-with st.expander("🔍 Ver transacciones y ventas a la máquina detectadas"):
+# Expander de diagnóstico en caso de que siga saliendo 0
+with st.expander("🔍 Ver transacciones y ventas a la máquina | 🛠️ Diagnóstico si valor es 0"):
+    st.write("Datos brutos del primer usuario (busca el campo del valor):")
+    st.json(users_data[0] if users_data else {})
+    
     if detected_events_log:
         df_log = pd.DataFrame(detected_events_log)
-        df_log["Importe (€)"] = df_log["Importe (€)"].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
-        st.dataframe(df_log, use_container_width=True, hide_index=True)
-    else:
-        st.info("No se han detectado movimientos todavía.")
+        st.dataframe(df_log, use_container_width=True)
