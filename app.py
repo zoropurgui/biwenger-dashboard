@@ -4,7 +4,7 @@ import requests
 
 st.set_page_config(page_title="Biwenger Financial Monitor Pro", page_icon="⚽", layout="wide")
 
-st.title("⚽ Monitor Financiero Biwenger (Control Total)")
+st.title("⚽ Monitor Financiero Biwenger (Automático Real-Time)")
 
 # --- SIDEBAR: Configuración ---
 st.sidebar.header("🔑 Conexión")
@@ -49,50 +49,102 @@ l_id, u_id = league_dict[selected_league]
 st.sidebar.header("⚙️ Ajustes")
 max_bid_pct = st.sidebar.slider("Crédito Valor Equipo (%)", 0, 100, 25)
 
-# --- PANEL DE AJUSTES MANUALES (Para saltarse el bloqueo de la máquina) ---
-st.sidebar.subheader("🛠️ Ajuste Manual (Ventas a Máquina)")
-st.sidebar.caption("Usa esto si Biwenger oculta una venta a la máquina hasta mañana.")
-manual_marroba = st.sidebar.number_input("Ajuste Extra para Marroba (€)", value=75000.0, step=10000.0, format="%.0f")
-
 if st.sidebar.button("🔄 Recargar Datos"):
     st.cache_data.clear()
     st.rerun()
 
-# --- LÓGICA DE DATOS ---
+# --- LÓGICA DE DATOS Y PARSER ROBUSTO ---
 headers = {"Authorization": f"Bearer {clean_token}", "X-League": str(l_id), "X-User": str(u_id), "X-App-Version": "2.0.0"}
 
 @st.cache_data(ttl=5)
 def get_data():
     base = "https://biwenger.as.com/api/v2/league"
     try:
-        users = requests.get(base, headers=headers).json().get("data", {}).get("users", [])
-        transfers = requests.get(f"{base}/transfers?limit=100", headers=headers).json().get("data", [])
-        board = requests.get(f"{base}/board?limit=100", headers=headers).json().get("data", [])
+        users_resp = requests.get(base, headers=headers).json()
+        users = users_resp.get("data", {}).get("users", [])
+        
+        transfers_resp = requests.get(f"{base}/transfers?limit=100", headers=headers).json()
+        transfers = transfers_resp.get("data", [])
+        
+        board_resp = requests.get(f"{base}/board?limit=100", headers=headers).json()
+        board = board_resp.get("data", [])
+        
         return users, transfers, board
     except: return [], [], []
 
 users_data, transfers, board = get_data()
 
 user_adjustments = {u.get("id"): 0.0 for u in users_data}
+user_names = {u.get("id"): u.get("name") for u in users_data}
 
-def process_transaction(s_id, b_id, amount):
-    if not amount or amount <= 0: return
-    if s_id in user_adjustments: user_adjustments[s_id] += amount
-    if b_id in user_adjustments: user_adjustments[b_id] -= amount
+detected_events_log = []
 
+def extract_id(val):
+    if isinstance(val, dict):
+        return val.get("id")
+    if isinstance(val, (int, str)) and str(val).isdigit():
+        return int(val)
+    return None
+
+def process_transaction(s_raw, b_raw, amount, source_desc=""):
+    try:
+        amt = float(amount)
+    except:
+        amt = 0.0
+    if amt <= 0:
+        return
+    
+    s_id = extract_id(s_raw)
+    b_id = extract_id(b_raw)
+    
+    if s_id in user_adjustments:
+        user_adjustments[s_id] += amt
+    if b_id in user_adjustments:
+        user_adjustments[b_id] -= amt
+        
+    s_name = user_names.get(s_id, f"Usuario {s_id}" if s_id else "Máquina / Mercado")
+    b_name = user_names.get(b_id, f"Usuario {b_id}" if b_id else "Máquina / Mercado")
+    
+    detected_events_log.append({
+        "Fuente": source_desc,
+        "Vendedor": s_name,
+        "Comprador": b_name,
+        "Importe (€)": amt
+    })
+
+# 1. Procesar endpoint de transferencias
 for t in transfers:
-    s = t.get("from", {}).get("id") if isinstance(t.get("from"), dict) else t.get("from")
-    b = t.get("to", {}).get("id") if isinstance(t.get("to"), dict) else t.get("to")
-    process_transaction(s, b, float(t.get("amount", 0)))
+    if not isinstance(t, dict): continue
+    s = t.get("from")
+    b = t.get("to")
+    amt = t.get("amount") or t.get("price") or 0
+    process_transaction(s, b, amt, "Transfers API")
 
+# 2. Procesar endpoint del tablón (feed) de forma robusta
 for e in board:
-    if isinstance(e.get("content"), list):
-        for item in e.get("content"):
-            if isinstance(item, dict):
-                s = item.get("from", {}).get("id") if isinstance(item.get("from"), dict) else item.get("from")
-                b = item.get("to", {}).get("id") if isinstance(item.get("to"), dict) else item.get("to")
-                amt = item.get("amount") or item.get("price") or 0
-                process_transaction(s, b, float(amt))
+    if not isinstance(e, dict): continue
+    e_user = e.get("user")
+    content = e.get("content")
+    
+    items = []
+    if isinstance(content, list):
+        items = content
+    elif isinstance(content, dict):
+        items = [content]
+        
+    for item in items:
+        if not isinstance(item, dict): continue
+        s = item.get("from")
+        b = item.get("to")
+        amt = item.get("amount") or item.get("price") or item.get("value") or 0
+        
+        # Si es una venta a la máquina (vender a ordenador sin 'to'), el usuario emisor es el vendedor
+        if not s and e_user and amt > 0:
+            ev_type = str(e.get("type", "")).lower()
+            if "transfer" in ev_type or "sale" in ev_type or "market" in ev_type or "player" in ev_type:
+                s = e_user
+                
+        process_transaction(s, b, amt, "Tablón (Feed)")
 
 # --- GENERAR TABLA FINAL ---
 records = []
@@ -101,28 +153,30 @@ for u in users_data:
     name = str(u.get("name", "Desconocido")).lower()
     
     v_inicial = DAY_ONE_VALS.get(name, 21500000.0)
+    ajuste_total = user_adjustments.get(u_id, 0.0)
     
-    # Sumamos el ajuste automático del tablón + el ajuste manual por si la máquina lo oculta
-    extra_manual = manual_marroba if "marroba" in name else 0.0
-    total_ajustes = user_adjustments.get(u_id, 0.0) + extra_manual
-    
-    saldo_real = (INITIAL_TOTAL - v_inicial) + total_ajustes
-    
+    saldo_real = (INITIAL_TOTAL - v_inicial) + ajuste_total
     v_actual = float(u.get("teamValue", 0) or 0)
     puja_max = saldo_real + ((max_bid_pct / 100.0) * v_actual)
     
     records.append({
         "Usuario": u.get("name"),
         "💸 Saldo Real en Caja": saldo_real,
-        "🔄 Ajuste Ventas / Máquina": total_ajustes,
+        "🔄 Ajuste Automático Tablón": ajuste_total,
         "🔥 Puja Máxima Real": puja_max
     })
 
 df = pd.DataFrame(records).sort_values("💸 Saldo Real en Caja", ascending=False)
-for col in ["💸 Saldo Real en Caja", "🔄 Ajuste Ventas / Máquina", "🔥 Puja Máxima Real"]:
+for col in ["💸 Saldo Real en Caja", "🔄 Ajuste Automático Tablón", "🔥 Puja Máxima Real"]:
     df[col] = df[col].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
 
+st.subheader("📊 Monitor Financiero en Directo")
 st.dataframe(df, use_container_width=True, hide_index=True)
 
-st.write("---")
-st.caption("💡 Consejo: Si un usuario vende a la máquina y Biwenger lo oculta, introduce la cantidad exacta en la barra lateral ('Ajuste Extra para Marroba') para forzar el cálculo real de inmediato.")
+with st.expander("🔍 Ver transacciones y eventos detectados automáticamente"):
+    if detected_events_log:
+        df_log = pd.DataFrame(detected_events_log)
+        df_log["Importe (€)"] = df_log["Importe (€)"].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
+        st.dataframe(df_log, use_container_width=True, hide_index=True)
+    else:
+        st.info("No se han detectado movimientos de transacciones todavía.")
