@@ -89,9 +89,14 @@ def load_data(t):
     return None, None, {"error": str(e)}, {}, {}, {}
 
 
-l_id, u_id, league_resp, transfers_resp, board_resp, standings_resp = load_data(
-    clean_token
-)
+(
+    l_id,
+    u_id,
+    league_resp,
+    transfers_resp,
+    board_resp,
+    standings_resp,
+) = load_data(clean_token)
 if not l_id:
   st.error("❌ Error al conectar con la API de Biwenger. Comprueba tu token.")
   st.stop()
@@ -499,6 +504,16 @@ if records:
       styled_df,
       use_container_width=True,
       hide_index=True,
+  )
+
+  # --- GRÁFICO DE BARRAS DE VALOR DE EQUIPO + CAJA ---
+  st.markdown("---")
+  st.subheader("📈 Comparativa: Valor del Equipo + Caja")
+  st.bar_chart(
+      df_final,
+      x="Usuario",
+      y="Valor equipo + caja",
+      use_container_width=True,
   )
 
 else:
