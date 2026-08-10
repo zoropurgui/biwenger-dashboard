@@ -300,7 +300,6 @@ if isinstance(board, list):
       if not isinstance(el, dict):
         continue
 
-      # Extraer cualquier importe monetario
       amt = float(
           el.get("amount", 0)
           or el.get("price", 0)
@@ -311,15 +310,12 @@ if isinstance(board, list):
       if amt <= 0:
         continue
 
-      # Extraer todos los posibles identificadores de usuario
       s_id = parse_entity_id(el.get("from"))
       b_id = parse_entity_id(el.get("to"))
       u_id_direct = parse_entity_id(el.get("user")) or parse_entity_id(
           el.get("userID")
       )
 
-      # Casos de uso:
-      # A) Movimiento entre dos mánagers (ej. Venta, compra o clausulazo)
       if (
           s_id
           and b_id
@@ -328,21 +324,29 @@ if isinstance(board, list):
       ):
         add_money(s_id, amt, f"Venta mánager ({type_event})")
         sub_money(b_id, amt, f"Compra mánager ({type_event})")
-
-      # B) Venta a la máquina (o salida de fondos)
       elif s_id and s_id in user_adjustments and not b_id:
         add_money(s_id, amt, f"Venta a Mercado ({type_event})")
-
-      # C) Compra al mercado / Subasta
       elif b_id and b_id in user_adjustments and not s_id:
         sub_money(b_id, amt, f"Compra a Mercado ({type_event})")
-
-      # D) Primas, premios de jornada, bonificaciones manuales o penalizaciones
       elif u_id_direct and u_id_direct in user_adjustments:
         if amt > 0:
           add_money(u_id_direct, amt, f"Abono / Prima ({type_event})")
         else:
           sub_money(u_id_direct, abs(amt), f"Penalización ({type_event})")
+
+# --- CORRECCIONES MANUALES ESPECÍFICAS ---
+OVERRIDE_TARGET_CASH = {
+    "yoqsetio xdxd": -280000.0,
+}
+
+for uid, name in user_names.items():
+  name_lower = str(name).lower().strip()
+  for target_key, target_cash in OVERRIDE_TARGET_CASH.items():
+    if target_key in name_lower:
+      v_inicial = get_day_one_val(name)
+      # Calculamos el ajuste exacto necesario para que (40M - V_inicial + ajuste) == target_cash
+      required_adj = target_cash - (INITIAL_TOTAL - v_inicial)
+      user_adjustments[uid] = required_adj
 
 # --- CONSTRUCCIÓN DE LA TABLA EDITABLE ---
 records = []
