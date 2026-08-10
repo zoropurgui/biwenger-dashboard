@@ -95,7 +95,22 @@ if st.button("🔄 Recargar Datos"):
   st.cache_data.clear()
   st.rerun()
 
-# --- VALORES DE REFERENCIA / DÍA 1 ---
+# --- VALORES DE REFERENCIA / DÍA 1 Y ORDEN DE USUARIOS ---
+CUSTOM_USER_ORDER = [
+    "athletik81",
+    "ring014",
+    "tubu",
+    "marroba",
+    "yoqsetio xdxd",
+    "nitwolf",
+    "nistalikus",
+    "gran gravessen",
+    "moltisanti",
+    "zoropurgui",
+    "_caesar_",
+    "nitrorx",
+]
+
 DAY_ONE_VALS = {
     "athletik81": 21600000.0,
     "ring014": 21580000.0,
@@ -119,6 +134,14 @@ def get_day_one_val(name):
     if d_key in n_lower:
       return d_v
   return 21500000.0
+
+
+def get_user_rank(name):
+  n_lower = str(name).lower().strip()
+  for idx, target_key in enumerate(CUSTOM_USER_ORDER):
+    if target_key in n_lower:
+      return idx
+  return 999
 
 
 # --- EXTRACCIÓN DE DATOS DE LA LIGA ---
@@ -439,8 +462,11 @@ if records:
       (max_bid_pct / 100.0) * df_final["Valor actual del equipo"]
   )
 
-  # Orden inicial predeterminado por 'Valor equipo + caja' descendente
-  df_final = df_final.sort_values("Valor equipo + caja", ascending=False)
+  # Ordenar segun el listado especificado en la imagen
+  df_final["rank_custom"] = df_final["Usuario"].apply(get_user_rank)
+  df_final = df_final.sort_values("rank_custom", ascending=True).drop(
+      columns=["rank_custom"]
+  )
 
   cols_num = [
       "Valor actual del equipo",
@@ -451,13 +477,11 @@ if records:
       "Puja máxima",
   ]
 
-  # Función de estilo: solo aplica color rojo si el valor numérico es estrictamente menor a cero
   def highlight_only_negatives(val):
     if isinstance(val, (int, float)) and val < 0:
       return "color: red; font-weight: bold;"
     return ""
 
-  # Aplicamos el formato con separador de miles (puntos) y moneda a todas las columnas numéricas
   format_dict = {col: "{:,.0f} €" for col in cols_num}
 
   styled_df = (
@@ -480,7 +504,9 @@ st.subheader("📜 Historial de Traspasos, Primas y Movimientos Detectados")
 if detected_events_log:
   df_log = pd.DataFrame(detected_events_log)
 
-  styled_log = df_log.style.format({"Importe (€)": "{:,.0f} €"}, thousands=".", precision=0)
+  styled_log = df_log.style.format(
+      {"Importe (€)": "{:,.0f} €"}, thousands=".", precision=0
+  )
 
   st.dataframe(
       styled_log,
