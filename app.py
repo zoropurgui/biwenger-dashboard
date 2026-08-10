@@ -37,7 +37,7 @@ def save_history(history_data):
 # --- SIDEBAR: Configuración ---
 token = st.sidebar.text_input("Bearer Token", type="password")
 uploaded_file = st.sidebar.file_uploader(
-    "📸 Sube captura de Biwenger", type=["png", "jpg", "jpeg"]
+    "📸 Sube captura de Biwenger (Opcional)", type=["png", "jpg", "jpeg"]
 )
 
 if not token:
@@ -58,7 +58,7 @@ def load_data(t):
     ).json()
     leagues = acc.get("data", {}).get("leagues", [])
     if not leagues:
-      return None, None, {}, {}, {}
+      return None, None, {}, {}, {}, {}
 
     l = leagues[0]
     l_id = l.get("id")
@@ -71,21 +71,29 @@ def load_data(t):
         f"https://biwenger.as.com/api/v2/league/{l_id}?include=all",
         headers=h_league,
     ).json()
+    
+    # --- NUEVA PETICIÓN PARA EXTRAER VALORES DE EQUIPO DIRECTOS DE LA API ---
+    r_standings = requests.get(
+        "https://biwenger.as.com/api/v2/standings",
+        headers=h_league,
+    ).json()
+    
     r_transfers = requests.get(
         f"https://biwenger.as.com/api/v2/league/{l_id}/transfers?limit=100",
         headers=h_league,
     ).json()
+    
     r_board = requests.get(
         f"https://biwenger.as.com/api/v2/league/{l_id}/board?limit=100",
         headers=h_league,
     ).json()
 
-    return l_id, u_id, r_league, r_transfers, r_board
+    return l_id, u_id, r_league, r_transfers, r_board, r_standings
   except Exception as e:
-    return None, None, {"error": str(e)}, {}, {}
+    return None, None, {"error": str(e)}, {}, {}, {}
 
 
-l_id, u_id, league_resp, transfers_resp, board_resp = load_data(clean_token)
+l_id, u_id, league_resp, transfers_resp, board_resp, standings_resp = load_data(clean_token)
 if not l_id:
   st.error("❌ Error al conectar con la API de Biwenger. Comprueba tu token.")
   st.stop()
@@ -144,19 +152,29 @@ def get_user_rank(name):
   return 999
 
 
-# --- EXTRACCIÓN DE DATOS DE LA LIGA ---
+# --- EXTRACCIÓN DE DATOS DE LA LIGA Y STANDINGS ---
 league_data = (
     league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
 )
+standings_data = (
+    standings_resp.get("data", []) if isinstance(standings_resp, dict) else []
+)
+
 raw_list = []
+
+# 1. Añadimos primero los datos de clasificación (donde viene el teamValue seguro)
+if isinstance(standings_data, list):
+  raw_list.extend(standings_data)
+elif isinstance(standings_data, dict):
+  raw_list.extend(list(standings_data.values()))
+
+# 2. Añadimos datos de la liga por compatibilidad
 for key_name in ["standings", "users", "members"]:
   val = league_data.get(key_name)
   if isinstance(val, list) and len(val) > 0:
-    raw_list = val
-    break
+    raw_list.extend(val)
   elif isinstance(val, dict) and len(val) > 0:
-    raw_list = list(val.values())
-    break
+    raw_list.extend(list(val.values()))
 
 user_names = {}
 current_vm_data = {}
@@ -176,9 +194,11 @@ if raw_list:
       uid = str(uname).lower().strip()
     elif uid is not None:
       uid = str(uid)
+    
     if uid and uname:
       user_names[uid] = uname
       t_val = None
+      # Busca el valor del equipo (teamValue) del JSON
       for k in ["teamValue", "value", "marketValue", "price", "team_value"]:
         if k in item and item[k] is not None:
           try:
@@ -188,6 +208,7 @@ if raw_list:
               break
           except:
             pass
+            
       if t_val is None:
         for sub_key in ["team", "account", "user", "data"]:
           sub_obj = item.get(sub_key)
@@ -209,13 +230,15 @@ if raw_list:
                   pass
             if t_val is not None:
               break
+              
+      # Si ha encontrado el valor de mercado, lo guarda
       if t_val is not None:
         current_vm_data[uid] = t_val
       extraction_debug_logs.append({"ID": uid, "Usuario": uname})
 
-# --- PROCESAMIENTO OCR MEJORADO (TESSERACT POR FILAS) ---
+# --- PROCESAMIENTO OCR (Actúa como respaldo opcional) ---
 if uploaded_file is not None:
-  st.write("🔍 Leyendo captura por filas con Tesseract...")
+  st.write("🔍 Leyendo captura por filas con Tesseract (Modo Respaldo)...")
   try:
     img = Image.open(uploaded_file).convert("L")
     data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
@@ -265,7 +288,7 @@ if uploaded_file is not None:
       if matched_uid and matched_val:
         current_vm_data[matched_uid] = matched_val
 
-    st.success("✅ Valores actualizados correctamente desde la imagen.")
+    st.success("✅ Valores actualizados o sobreescritos desde la imagen.")
   except Exception as e:
     st.error(f"Error procesando la imagen: {e}")
 
@@ -435,8 +458,8 @@ for uid, name in user_names.items():
 if records:
   st.subheader("📊 Monitor Financiero en Directo")
   st.write(
-      "✏️ *Actualiza o comprueba el 'Valor actual del equipo' reflejado por la"
-      " captura.*"
+      "✏️ *La API debería cargar los valores automáticamente. Si algo falla, "
+      "puedes usar la tabla para editarlos manualmente.*"
   )
 
   df_records = pd.DataFrame(records)
@@ -462,7 +485,7 @@ if records:
       (max_bid_pct / 100.0) * df_final["Valor actual del equipo"]
   )
 
-  # Ordenar segun el listado especificado en la imagen
+  # Ordenar segun el listado especificado por el usuario
   df_final["rank_custom"] = df_final["Usuario"].apply(get_user_rank)
   df_final = df_final.sort_values("rank_custom", ascending=True).drop(
       columns=["rank_custom"]
