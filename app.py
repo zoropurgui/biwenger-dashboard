@@ -58,7 +58,7 @@ def load_data(t):
     ).json()
     leagues = acc.get("data", {}).get("leagues", [])
     if not leagues:
-      return None, None, {}, {}, {}
+      return None, None, {}, {}, {}, {}
 
     l = leagues[0]
     l_id = l.get("id")
@@ -71,6 +71,10 @@ def load_data(t):
         f"https://biwenger.as.com/api/v2/league/{l_id}?include=all",
         headers=h_league,
     ).json()
+    r_standings = requests.get(
+        f"https://biwenger.as.com/api/v2/league/{l_id}/standings",
+        headers=h_league,
+    ).json()
     r_transfers = requests.get(
         f"https://biwenger.as.com/api/v2/league/{l_id}/transfers?limit=100",
         headers=h_league,
@@ -80,12 +84,14 @@ def load_data(t):
         headers=h_league,
     ).json()
 
-    return l_id, u_id, r_league, r_transfers, r_board
+    return l_id, u_id, r_league, r_transfers, r_board, r_standings
   except Exception as e:
-    return None, None, {"error": str(e)}, {}, {}
+    return None, None, {"error": str(e)}, {}, {}, {}
 
 
-l_id, u_id, league_resp, transfers_resp, board_resp = load_data(clean_token)
+l_id, u_id, league_resp, transfers_resp, board_resp, standings_resp = load_data(
+    clean_token
+)
 if not l_id:
   st.error("❌ Error al conectar con la API de Biwenger. Comprueba tu token.")
   st.stop()
@@ -144,74 +150,62 @@ def get_user_rank(name):
   return 999
 
 
-# --- EXTRACCIÓN DE DATOS DE LA LIGA ---
-league_data = (
+# --- EXTRACCIÓN DE DATOS DE LA LIGA Y STANDINGS ---
+raw_list = []
+
+# Extraer primero de /standings (clasificación real)
+s_data = (
+    standings_resp.get("data", [])
+    if isinstance(standings_resp, dict)
+    else standings_resp
+)
+if isinstance(s_data, list):
+  raw_list.extend(s_data)
+
+# Extraer de /league
+l_data = (
     league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
 )
-raw_list = []
 for key_name in ["standings", "users", "members"]:
-  val = league_data.get(key_name)
-  if isinstance(val, list) and len(val) > 0:
-    raw_list = val
-    break
-  elif isinstance(val, dict) and len(val) > 0:
-    raw_list = list(val.values())
-    break
+  val = l_data.get(key_name)
+  if isinstance(val, list):
+    raw_list.extend(val)
+  elif isinstance(val, dict):
+    raw_list.extend(list(val.values()))
 
 user_names = {}
 current_vm_data = {}
-api_balance_data = {}
-extraction_debug_logs = []
 
-if raw_list:
-  for item in raw_list:
-    if not isinstance(item, dict):
-      continue
-    uid = item.get("id")
-    uname = item.get("name") or item.get("username")
-    if uid is None and isinstance(item.get("user"), dict):
-      uid = item.get("user").get("id")
-      uname = item.get("user").get("name") or item.get("user").get("username")
-    if uid is None and uname is not None:
-      uid = str(uname).lower().strip()
-    elif uid is not None:
-      uid = str(uid)
-    if uid and uname:
-      user_names[uid] = uname
-      t_val = None
-      for k in ["teamValue", "value", "marketValue", "price", "team_value"]:
-        if k in item and item[k] is not None:
-          try:
-            val = float(item[k])
-            if val > 0:
-              t_val = val
-              break
-          except:
-            pass
-      if t_val is None:
-        for sub_key in ["team", "account", "user", "data"]:
-          sub_obj = item.get(sub_key)
-          if isinstance(sub_obj, dict):
-            for k in [
-                "teamValue",
-                "value",
-                "marketValue",
-                "price",
-                "team_value",
-            ]:
-              if k in sub_obj and sub_obj[k] is not None:
-                try:
-                  val = float(sub_obj[k])
-                  if val > 0:
-                    t_val = val
-                    break
-                except:
-                  pass
-            if t_val is not None:
-              break
-      if t_val is not None:
-        current_vm_data[uid] = t_val
-      extraction_debug_logs.append({"ID": uid, "Usuario": uname})
+for item in raw_list:
+  if not isinstance(item, dict):
+    continue
+  uid = item.get("id")
+  uname = item.get("name") or item.get("username")
+  if uid is None and isinstance(item.get("user"), dict):
+    uid = item.get("user").get("id")
+    uname = item.get("user").get("name") or item.get("user").get("username")
+
+  if uname:
+    uid_str = str(uid) if uid is not None else str(uname).lower().strip()
+    uname_clean = str(uname).lower().strip()
+
+    user_names[uid_str] = uname
+
+    t_val = None
+    for k in ["teamValue", "value", "marketValue", "price", "team_value"]:
+      if k in item and item[k] is not None:
+        try:
+          val = float(item[k])
+          if val > 100000:
+            t_val = val
+            break
+        except:
+          pass
+
+    if t_val is not None:
+      # Guardar tanto por ID como por nombre limpio para evitar descalces
+      current_vm_data[uid_str] = t_val
+      current_vm_data[uname_clean] = t_val
 
 # --- PROCESAMIENTO OCR MEJORADO (TESSERACT POR FILAS) ---
 if uploaded_file is not None:
@@ -244,6 +238,7 @@ if uploaded_file is not None:
       row_text = " ".join(words).lower()
 
       matched_uid = None
+      matched_uname = None
       for u_name, uid in known_users.items():
         parts = u_name.split()
         if (
@@ -251,6 +246,7 @@ if uploaded_file is not None:
             or u_name in row_text
         ):
           matched_uid = uid
+          matched_uname = u_name
           break
 
       matched_val = None
@@ -262,8 +258,11 @@ if uploaded_file is not None:
             matched_val = val
             break
 
-      if matched_uid and matched_val:
-        current_vm_data[matched_uid] = matched_val
+      if matched_val:
+        if matched_uid:
+          current_vm_data[matched_uid] = matched_val
+        if matched_uname:
+          current_vm_data[matched_uname] = matched_val
 
     st.success("✅ Valores actualizados correctamente desde la imagen.")
   except Exception as e:
@@ -418,9 +417,15 @@ for uid, name in user_names.items():
 records = []
 for uid, name in user_names.items():
   v_inicial = get_day_one_val(name)
-  v_actual = current_vm_data.get(uid, v_inicial)
-  ajuste = user_adjustments.get(uid, 0.0)
+  name_clean = str(name).lower().strip()
 
+  v_actual = (
+      current_vm_data.get(uid)
+      or current_vm_data.get(name_clean)
+      or v_inicial
+  )
+
+  ajuste = user_adjustments.get(uid, 0.0)
   saldo_real = (INITIAL_TOTAL - v_inicial) + ajuste
 
   records.append({
