@@ -37,7 +37,7 @@ def save_history(history_data):
 # --- SIDEBAR: Configuración ---
 token = st.sidebar.text_input("Bearer Token", type="password")
 uploaded_file = st.sidebar.file_uploader(
-    "📸 Sube captura de Biwenger (Opcional)", type=["png", "jpg", "jpeg"]
+    "📸 Sube captura de Biwenger", type=["png", "jpg", "jpeg"]
 )
 
 if not token:
@@ -58,7 +58,7 @@ def load_data(t):
     ).json()
     leagues = acc.get("data", {}).get("leagues", [])
     if not leagues:
-      return None, None, {}, {}, {}, {}
+      return None, None, {}, {}, {}
 
     l = leagues[0]
     l_id = l.get("id")
@@ -71,31 +71,21 @@ def load_data(t):
         f"https://biwenger.as.com/api/v2/league/{l_id}?include=all",
         headers=h_league,
     ).json()
-
-    # Petición explícita al endpoint de clasificación/standings
-    r_standings = requests.get(
-        f"https://biwenger.as.com/api/v2/league/{l_id}/standings",
-        headers=h_league,
-    ).json()
-
     r_transfers = requests.get(
         f"https://biwenger.as.com/api/v2/league/{l_id}/transfers?limit=100",
         headers=h_league,
     ).json()
-
     r_board = requests.get(
         f"https://biwenger.as.com/api/v2/league/{l_id}/board?limit=100",
         headers=h_league,
     ).json()
 
-    return l_id, u_id, r_league, r_transfers, r_board, r_standings
+    return l_id, u_id, r_league, r_transfers, r_board
   except Exception as e:
-    return None, None, {"error": str(e)}, {}, {}, {}
+    return None, None, {"error": str(e)}, {}, {}
 
 
-l_id, u_id, league_resp, transfers_resp, board_resp, standings_resp = load_data(
-    clean_token
-)
+l_id, u_id, league_resp, transfers_resp, board_resp = load_data(clean_token)
 if not l_id:
   st.error("❌ Error al conectar con la API de Biwenger. Comprueba tu token.")
   st.stop()
@@ -154,67 +144,78 @@ def get_user_rank(name):
   return 999
 
 
-# --- EXTRACCIÓN DE DATOS RECURSIVA ---
-items_to_process = []
-
-
-def collect_items(obj):
-  if isinstance(obj, list):
-    for item in obj:
-      collect_items(item)
-  elif isinstance(obj, dict):
-    if any(k in obj for k in ["teamValue", "value", "marketValue"]):
-      items_to_process.append(obj)
-    for v in obj.values():
-      if isinstance(v, (dict, list)):
-        collect_items(v)
-
-
-collect_items(league_resp)
-collect_items(standings_resp)
+# --- EXTRACCIÓN DE DATOS DE LA LIGA ---
+league_data = (
+    league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
+)
+raw_list = []
+for key_name in ["standings", "users", "members"]:
+  val = league_data.get(key_name)
+  if isinstance(val, list) and len(val) > 0:
+    raw_list = val
+    break
+  elif isinstance(val, dict) and len(val) > 0:
+    raw_list = list(val.values())
+    break
 
 user_names = {}
 current_vm_data = {}
+api_balance_data = {}
+extraction_debug_logs = []
 
-for item in items_to_process:
-  uid = item.get("id")
-  uname = item.get("name") or item.get("username")
+if raw_list:
+  for item in raw_list:
+    if not isinstance(item, dict):
+      continue
+    uid = item.get("id")
+    uname = item.get("name") or item.get("username")
+    if uid is None and isinstance(item.get("user"), dict):
+      uid = item.get("user").get("id")
+      uname = item.get("user").get("name") or item.get("user").get("username")
+    if uid is None and uname is not None:
+      uid = str(uname).lower().strip()
+    elif uid is not None:
+      uid = str(uid)
+    if uid and uname:
+      user_names[uid] = uname
+      t_val = None
+      for k in ["teamValue", "value", "marketValue", "price", "team_value"]:
+        if k in item and item[k] is not None:
+          try:
+            val = float(item[k])
+            if val > 0:
+              t_val = val
+              break
+          except:
+            pass
+      if t_val is None:
+        for sub_key in ["team", "account", "user", "data"]:
+          sub_obj = item.get(sub_key)
+          if isinstance(sub_obj, dict):
+            for k in [
+                "teamValue",
+                "value",
+                "marketValue",
+                "price",
+                "team_value",
+            ]:
+              if k in sub_obj and sub_obj[k] is not None:
+                try:
+                  val = float(sub_obj[k])
+                  if val > 0:
+                    t_val = val
+                    break
+                except:
+                  pass
+            if t_val is not None:
+              break
+      if t_val is not None:
+        current_vm_data[uid] = t_val
+      extraction_debug_logs.append({"ID": uid, "Usuario": uname})
 
-  if uid is None and isinstance(item.get("user"), dict):
-    uid = item.get("user").get("id")
-    uname = item.get("user").get("name") or item.get("user").get("username")
-
-  if uname:
-    uname_clean = str(uname).lower().strip()
-    uid_str = str(uid) if uid is not None else uname_clean
-
-    user_names[uid_str] = uname
-
-    t_val = None
-    for k in ["teamValue", "value", "marketValue", "price", "team_value"]:
-      if k in item and item[k] is not None:
-        try:
-          val = float(item[k])
-          if val > 100000:
-            t_val = val
-            break
-        except:
-          pass
-
-    if t_val is not None:
-      current_vm_data[uid_str] = t_val
-      current_vm_data[uname_clean] = t_val
-
-# Asegurar mánagers predefinidos si no fueron devueltos por la API
-for name in DAY_ONE_VALS.keys():
-  name_clean = name.lower().strip()
-  if not any(name_clean in u.lower() for u in user_names.values()):
-    uid_fallback = name_clean.replace(" ", "_")
-    user_names[uid_fallback] = name.title()
-
-# --- PROCESAMIENTO OCR (Respaldo Opcional) ---
+# --- PROCESAMIENTO OCR MEJORADO (TESSERACT POR FILAS) ---
 if uploaded_file is not None:
-  st.write("🔍 Leyendo captura por filas con Tesseract (Modo Respaldo)...")
+  st.write("🔍 Leyendo captura por filas con Tesseract...")
   try:
     img = Image.open(uploaded_file).convert("L")
     data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
@@ -243,7 +244,6 @@ if uploaded_file is not None:
       row_text = " ".join(words).lower()
 
       matched_uid = None
-      matched_uname = None
       for u_name, uid in known_users.items():
         parts = u_name.split()
         if (
@@ -251,7 +251,6 @@ if uploaded_file is not None:
             or u_name in row_text
         ):
           matched_uid = uid
-          matched_uname = u_name
           break
 
       matched_val = None
@@ -263,15 +262,19 @@ if uploaded_file is not None:
             matched_val = val
             break
 
-      if matched_val and (matched_uid or matched_uname):
-        if matched_uid:
-          current_vm_data[matched_uid] = matched_val
-        if matched_uname:
-          current_vm_data[matched_uname] = matched_val
+      if matched_uid and matched_val:
+        current_vm_data[matched_uid] = matched_val
 
-    st.success("✅ Valores actualizados o sobreescritos desde la imagen.")
+    st.success("✅ Valores actualizados correctamente desde la imagen.")
   except Exception as e:
     st.error(f"Error procesando la imagen: {e}")
+
+if not user_names:
+  for name, val in DAY_ONE_VALS.items():
+    uid = name.replace(" ", "_")
+    user_names[uid] = name.title()
+    if uid not in current_vm_data:
+      current_vm_data[uid] = val
 
 # --- CARGAR HISTORIAL ACUMULADO ---
 stored_history = load_history()
@@ -288,6 +291,7 @@ def parse_entity_id(ent):
 
 
 def register_event(event_key, uid, amt, desc):
+  """Registra un evento solo si no existía ya en la base de datos local."""
   if event_key not in stored_history:
     stored_history[event_key] = {
         "uid": str(uid),
@@ -414,21 +418,9 @@ for uid, name in user_names.items():
 records = []
 for uid, name in user_names.items():
   v_inicial = get_day_one_val(name)
-  name_clean = str(name).lower().strip()
-
-  # Búsqueda por ID, por Nombre o por subcadena
-  v_actual = current_vm_data.get(uid) or current_vm_data.get(name_clean)
-
-  if v_actual is None:
-    for vm_key, vm_val in current_vm_data.items():
-      if vm_key in name_clean or name_clean in vm_key:
-        v_actual = vm_val
-        break
-
-  if v_actual is None:
-    v_actual = v_inicial
-
+  v_actual = current_vm_data.get(uid, v_inicial)
   ajuste = user_adjustments.get(uid, 0.0)
+
   saldo_real = (INITIAL_TOTAL - v_inicial) + ajuste
 
   records.append({
@@ -442,12 +434,13 @@ for uid, name in user_names.items():
 
 if records:
   st.subheader("📊 Monitor Financiero en Directo")
-
-  # Desplegable de depuración para verificar la lectura
-  with st.expander("🔍 Ver valores extraídos directamente de la API"):
-    st.write(current_vm_data)
+  st.write(
+      "✏️ *Actualiza o comprueba el 'Valor actual del equipo' reflejado por la"
+      " captura.*"
+  )
 
   df_records = pd.DataFrame(records)
+
   df_editor_input = df_records[["Usuario", "Valor actual del equipo"]].copy()
 
   edited_df = st.data_editor(
@@ -469,7 +462,7 @@ if records:
       (max_bid_pct / 100.0) * df_final["Valor actual del equipo"]
   )
 
-  # Ordenar según la ordenación solicitada
+  # Ordenar segun el listado especificado en la imagen
   df_final["rank_custom"] = df_final["Usuario"].apply(get_user_rank)
   df_final = df_final.sort_values("rank_custom", ascending=True).drop(
       columns=["rank_custom"]
