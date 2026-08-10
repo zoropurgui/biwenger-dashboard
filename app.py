@@ -58,7 +58,7 @@ def load_data(t):
     ).json()
     leagues = acc.get("data", {}).get("leagues", [])
     if not leagues:
-      return None, None, {}, {}, {}, {}, {}
+      return None, None, {}, {}, {}, {}
 
     l = leagues[0]
     l_id = l.get("id")
@@ -84,87 +84,14 @@ def load_data(t):
         headers=h_league,
     ).json()
 
-    # Extracción del valor de plantilla sumando jugador a jugador para cada rival
-    squad_values = {}
-    user_ids_found = set()
-
-    s_data = (
-        r_standings.get("data", [])
-        if isinstance(r_standings, dict)
-        else r_standings
-    )
-    if isinstance(s_data, list):
-      for item in s_data:
-        if isinstance(item, dict):
-          target_id = item.get("id") or (
-              item.get("user", {}).get("id")
-              if isinstance(item.get("user"), dict)
-              else None
-          )
-          if target_id:
-            user_ids_found.add(str(target_id))
-
-    l_data = (
-        r_league.get("data", {}) if isinstance(r_league, dict) else {}
-    )
-    for key_name in ["standings", "users", "members"]:
-      val = l_data.get(key_name)
-      if isinstance(val, list):
-        for item in val:
-          if isinstance(item, dict):
-            target_id = item.get("id") or (
-                item.get("user", {}).get("id")
-                if isinstance(item.get("user"), dict)
-                else None
-            )
-            if target_id:
-              user_ids_found.add(str(target_id))
-
-    for target_uid in user_ids_found:
-      try:
-        u_url = f"https://biwenger.as.com/api/v2/league/{l_id}/user/{target_uid}?fields=*,players(id,price,value,marketValue)"
-        r_u = requests.get(u_url, headers=h_league, timeout=5).json()
-        u_data = r_u.get("data", {})
-        players = u_data.get("players", [])
-        if not players and isinstance(u_data.get("user"), dict):
-          players = u_data.get("user", {}).get("players", [])
-
-        if not players:
-          u_url_fb = f"https://biwenger.as.com/api/v2/user/{target_uid}?fields=*,players(id,price,value,marketValue)"
-          r_u2 = requests.get(u_url_fb, headers=h_league, timeout=5).json()
-          u_data2 = r_u2.get("data", {})
-          players = u_data2.get("players", [])
-
-        if players:
-          total_squad = 0.0
-          for p in players:
-            if isinstance(p, dict):
-              pval = float(
-                  p.get("price")
-                  or p.get("value")
-                  or p.get("marketValue")
-                  or 0
-              )
-              total_squad += pval
-          if total_squad > 0:
-            squad_values[target_uid] = total_squad
-      except Exception:
-        pass
-
-    return l_id, u_id, r_league, r_transfers, r_board, r_standings, squad_values
+    return l_id, u_id, r_league, r_transfers, r_board, r_standings
   except Exception as e:
-    return None, None, {"error": str(e)}, {}, {}, {}, {}
+    return None, None, {"error": str(e)}, {}, {}, {}
 
 
-(
-    l_id,
-    u_id,
-    league_resp,
-    transfers_resp,
-    board_resp,
-    standings_resp,
-    squad_values_resp,
-) = load_data(clean_token)
+l_id, u_id, league_resp, transfers_resp, board_resp, standings_resp = load_data(
+    clean_token
+)
 if not l_id:
   st.error("❌ Error al conectar con la API de Biwenger. Comprueba tu token.")
   st.stop()
@@ -226,6 +153,7 @@ def get_user_rank(name):
 # --- EXTRACCIÓN DE DATOS DE LA LIGA Y STANDINGS ---
 raw_list = []
 
+# Extraer primero de /standings (clasificación real)
 s_data = (
     standings_resp.get("data", [])
     if isinstance(standings_resp, dict)
@@ -234,6 +162,7 @@ s_data = (
 if isinstance(s_data, list):
   raw_list.extend(s_data)
 
+# Extraer de /league
 l_data = (
     league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
 )
@@ -263,24 +192,18 @@ for item in raw_list:
     user_names[uid_str] = uname
 
     t_val = None
-
-    # Prioridad 1: Suma exacta de plantilla desde las llamadas a la API
-    if uid_str in squad_values_resp and squad_values_resp[uid_str] > 0:
-      t_val = squad_values_resp[uid_str]
-
-    # Prioridad 2: Atributos directos del objeto si existieran
-    if t_val is None:
-      for k in ["teamValue", "value", "marketValue", "price", "team_value"]:
-        if k in item and item[k] is not None:
-          try:
-            val = float(item[k])
-            if val > 100000:
-              t_val = val
-              break
-          except:
-            pass
+    for k in ["teamValue", "value", "marketValue", "price", "team_value"]:
+      if k in item and item[k] is not None:
+        try:
+          val = float(item[k])
+          if val > 100000:
+            t_val = val
+            break
+        except:
+          pass
 
     if t_val is not None:
+      # Guardar tanto por ID como por nombre limpio para evitar descalces
       current_vm_data[uid_str] = t_val
       current_vm_data[uname_clean] = t_val
 
