@@ -1,3 +1,5 @@
+import json
+import os
 import pandas as pd
 import pytesseract
 import requests
@@ -9,6 +11,28 @@ st.set_page_config(
 )
 
 st.title("⚽ Monitor Financiero Biwenger")
+
+# --- HISTORIAL PERSISTENTE EN DISCO ---
+HISTORY_FILE = "biwenger_history.json"
+
+
+def load_history():
+  if os.path.exists(HISTORY_FILE):
+    try:
+      with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
+    except Exception:
+      return {}
+  return {}
+
+
+def save_history(history_data):
+  try:
+    with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+      json.dump(history_data, f, ensure_ascii=False, indent=2)
+  except Exception as e:
+    st.warning(f"No se pudo guardar el historial local: {e}")
+
 
 # --- SIDEBAR: Configuración ---
 token = st.sidebar.text_input("Bearer Token", type="password")
@@ -48,11 +72,11 @@ def load_data(t):
         headers=h_league,
     ).json()
     r_transfers = requests.get(
-        f"https://biwenger.as.com/api/v2/league/{l_id}/transfers?limit=50",
+        f"https://biwenger.as.com/api/v2/league/{l_id}/transfers?limit=100",
         headers=h_league,
     ).json()
     r_board = requests.get(
-        f"https://biwenger.as.com/api/v2/league/{l_id}/board?limit=50",
+        f"https://biwenger.as.com/api/v2/league/{l_id}/board?limit=100",
         headers=h_league,
     ).json()
 
@@ -229,32 +253,10 @@ if not user_names:
     if uid not in current_vm_data:
       current_vm_data[uid] = val
 
+# --- CARGAR HISTORIAL ACUMULADO ---
+stored_history = load_history()
 user_adjustments = {uid: 0.0 for uid in user_names.keys()}
-
-# --- PROCESAR TRANSFERENCIAS Y TABLÓN ---
 detected_events_log = []
-
-
-def add_money(uid, amt, desc):
-  uid_str = str(uid)
-  if uid_str in user_adjustments and amt > 0:
-    user_adjustments[uid_str] += amt
-    detected_events_log.append({
-        "Usuario": user_names.get(uid_str, uid_str),
-        "Importe (€)": amt,
-        "Descripción": desc,
-    })
-
-
-def sub_money(uid, amt, desc):
-  uid_str = str(uid)
-  if uid_str in user_adjustments and amt > 0:
-    user_adjustments[uid_str] -= amt
-    detected_events_log.append({
-        "Usuario": user_names.get(uid_str, uid_str),
-        "Importe (€)": -amt,
-        "Descripción": desc,
-    })
 
 
 def parse_entity_id(ent):
@@ -265,16 +267,30 @@ def parse_entity_id(ent):
   return None
 
 
-# 1. Endpoint /transfers
+def register_event(event_key, uid, amt, desc):
+  """Registra un evento solo si no existía ya en la base de datos local."""
+  if event_key not in stored_history:
+    stored_history[event_key] = {
+        "uid": str(uid),
+        "amount": amt,
+        "description": desc,
+        "user_name": user_names.get(str(uid), str(uid)),
+    }
+
+
+# 1. Procesar /transfers
 transfers = (
     transfers_resp.get("data", [])
     if isinstance(transfers_resp, dict)
     else []
 )
 if isinstance(transfers, list):
-  for t in transfers:
+  for i, t in enumerate(transfers):
     if not isinstance(t, dict):
       continue
+    t_id = str(
+        t.get("id") or f"tr_{t.get('date', '')}_{i}_{t.get('amount', 0)}"
+    )
     amt = float(
         t.get("amount", 0) or t.get("price", 0) or t.get("value", 0) or 0
     )
@@ -282,21 +298,22 @@ if isinstance(transfers, list):
     b_id = parse_entity_id(t.get("to"))
 
     if s_id and s_id in user_adjustments:
-      add_money(s_id, amt, "Venta de Jugador")
+      register_event(f"tr_s_{t_id}", s_id, amt, "Venta de Jugador")
     if b_id and b_id in user_adjustments:
-      sub_money(b_id, amt, "Compra de Jugador")
+      register_event(f"tr_b_{t_id}", b_id, -amt, "Compra de Jugador")
 
-# 2. Endpoint /board (Procesamiento global de cualquier intercambio económico)
+# 2. Procesar /board
 board = board_resp.get("data", []) if isinstance(board_resp, dict) else []
 if isinstance(board, list):
-  for item in board:
+  for i, item in enumerate(board):
     if not isinstance(item, dict):
       continue
+    b_id_base = str(item.get("id") or f"bd_{item.get('date', '')}_{i}")
     type_event = item.get("type", "evento")
     content = item.get("content")
     elements = content if isinstance(content, list) else [content]
 
-    for el in elements:
+    for j, el in enumerate(elements):
       if not isinstance(el, dict):
         continue
 
@@ -305,6 +322,7 @@ if isinstance(board, list):
           or el.get("price", 0)
           or el.get("value", 0)
           or el.get("bonus", 0)
+          or el.get("earned", 0)
           or 0
       )
       if amt <= 0:
@@ -312,8 +330,10 @@ if isinstance(board, list):
 
       s_id = parse_entity_id(el.get("from"))
       b_id = parse_entity_id(el.get("to"))
-      u_id_direct = parse_entity_id(el.get("user")) or parse_entity_id(
-          el.get("userID")
+      u_id_direct = (
+          parse_entity_id(el.get("user"))
+          or parse_entity_id(el.get("userID"))
+          or parse_entity_id(el.get("id"))
       )
 
       if (
@@ -322,17 +342,43 @@ if isinstance(board, list):
           and s_id in user_adjustments
           and b_id in user_adjustments
       ):
-        add_money(s_id, amt, f"Venta mánager ({type_event})")
-        sub_money(b_id, amt, f"Compra mánager ({type_event})")
+        register_event(
+            f"bd_s_{b_id_base}_{j}", s_id, amt, f"Venta mánager ({type_event})"
+        )
+        register_event(
+            f"bd_b_{b_id_base}_{j}", b_id, -amt, f"Compra mánager ({type_event})"
+        )
       elif s_id and s_id in user_adjustments and not b_id:
-        add_money(s_id, amt, f"Venta a Mercado ({type_event})")
+        register_event(
+            f"bd_s_{b_id_base}_{j}", s_id, amt, f"Venta a Mercado ({type_event})"
+        )
       elif b_id and b_id in user_adjustments and not s_id:
-        sub_money(b_id, amt, f"Compra a Mercado ({type_event})")
+        register_event(
+            f"bd_b_{b_id_base}_{j}", b_id, -amt, f"Compra a Mercado ({type_event})"
+        )
       elif u_id_direct and u_id_direct in user_adjustments:
-        if amt > 0:
-          add_money(u_id_direct, amt, f"Abono / Prima ({type_event})")
-        else:
-          sub_money(u_id_direct, abs(amt), f"Penalización ({type_event})")
+        register_event(
+            f"bd_u_{b_id_base}_{j}",
+            u_id_direct,
+            amt,
+            f"Prima / Abono ({type_event})",
+        )
+
+# Guardar eventos consolidados
+save_history(stored_history)
+
+# Calcular sumatorios de los eventos almacenados
+for ev_id, ev_data in stored_history.items():
+  uid = ev_data.get("uid")
+  amt = ev_data.get("amount", 0.0)
+  desc = ev_data.get("description", "")
+  if uid in user_adjustments:
+    user_adjustments[uid] += amt
+    detected_events_log.append({
+        "Usuario": user_names.get(uid, ev_data.get("user_name", uid)),
+        "Importe (€)": amt,
+        "Descripción": desc,
+    })
 
 # --- CORRECCIÓN MANUAL PERMANENTE (-280.000 € A YOQSETIO XDXD) ---
 MANUAL_CORRECTIONS = {
@@ -416,7 +462,7 @@ else:
   st.warning("⚠️ No hay datos para mostrar en la tabla.")
 
 st.markdown("---")
-st.subheader("📜 Historial de Traspasos y Movimientos Detectados")
+st.subheader("📜 Historial de Traspasos, Primas y Movimientos Detectados")
 if detected_events_log:
   df_log = pd.DataFrame(detected_events_log)
   df_log["Importe (€)"] = df_log["Importe (€)"].apply(
