@@ -1,5 +1,6 @@
 streamlit
 pandas
-requests
 pytesseract
+requests
 pillow
+plotly
