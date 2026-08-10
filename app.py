@@ -334,6 +334,17 @@ if isinstance(board, list):
         else:
           sub_money(u_id_direct, abs(amt), f"Penalización ({type_event})")
 
+# --- CORRECCIÓN MANUAL PERMANENTE (-280.000 € A YOQSETIO XDXD) ---
+MANUAL_CORRECTIONS = {
+    "yoqsetio xdxd": -280000.0,
+}
+
+for uid, name in user_names.items():
+  name_lower = str(name).lower().strip()
+  for target_key, correction_amt in MANUAL_CORRECTIONS.items():
+    if target_key in name_lower:
+      user_adjustments[uid] += correction_amt
+
 # --- CONSTRUCCIÓN DE LA TABLA EDITABLE ---
 records = []
 for uid, name in user_names.items():
