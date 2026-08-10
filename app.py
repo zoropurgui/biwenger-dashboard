@@ -1,6 +1,7 @@
 import json
 import os
 import pandas as pd
+import plotly.express as px
 import pytesseract
 import requests
 import streamlit as st
@@ -158,7 +159,6 @@ def get_user_rank(name):
 # --- EXTRACCIÓN DE DATOS DE LA LIGA Y STANDINGS ---
 raw_list = []
 
-# Extraer primero de /standings (clasificación real)
 s_data = (
     standings_resp.get("data", [])
     if isinstance(standings_resp, dict)
@@ -167,7 +167,6 @@ s_data = (
 if isinstance(s_data, list):
   raw_list.extend(s_data)
 
-# Extraer de /league
 l_data = (
     league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
 )
@@ -208,7 +207,6 @@ for item in raw_list:
           pass
 
     if t_val is not None:
-      # Guardar tanto por ID como por nombre limpio para evitar descalces
       current_vm_data[uid_str] = t_val
       current_vm_data[uname_clean] = t_val
 
@@ -506,15 +504,33 @@ if records:
       hide_index=True,
   )
 
-  # --- GRÁFICO DE BARRAS DE VALOR DE EQUIPO + CAJA ---
+  # --- GRÁFICO DE BARRAS PERSONALIZADO (PLOTLY) ---
   st.markdown("---")
   st.subheader("📈 Comparativa: Valor del Equipo + Caja")
-  st.bar_chart(
+
+  fig = px.bar(
       df_final,
       x="Usuario",
       y="Valor equipo + caja",
-      use_container_width=True,
+      text="Valor equipo + caja",
+      color_discrete_sequence=["#0d6efd"],
   )
+
+  fig.update_traces(
+      texttemplate="%{text:,.0f} €",
+      textposition="outside",
+      width=0.3,  # Ajusta la anchura para hacer las barras más delgadas
+  )
+
+  fig.update_layout(
+      xaxis_title="Usuario",
+      yaxis_title="Valor equipo + caja",
+      yaxis=dict(showgrid=True),
+      height=500,
+      margin=dict(l=20, r=20, t=30, b=20),
+  )
+
+  st.plotly_chart(fig, use_container_width=True)
 
 else:
   st.warning("⚠️ No hay datos para mostrar en la tabla.")
