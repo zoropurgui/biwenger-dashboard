@@ -334,20 +334,6 @@ if isinstance(board, list):
         else:
           sub_money(u_id_direct, abs(amt), f"Penalización ({type_event})")
 
-# --- CORRECCIONES MANUALES ESPECÍFICAS ---
-OVERRIDE_TARGET_CASH = {
-    "yoqsetio xdxd": -280000.0,
-}
-
-for uid, name in user_names.items():
-  name_lower = str(name).lower().strip()
-  for target_key, target_cash in OVERRIDE_TARGET_CASH.items():
-    if target_key in name_lower:
-      v_inicial = get_day_one_val(name)
-      # Calculamos el ajuste exacto necesario para que (40M - V_inicial + ajuste) == target_cash
-      required_adj = target_cash - (INITIAL_TOTAL - v_inicial)
-      user_adjustments[uid] = required_adj
-
 # --- CONSTRUCCIÓN DE LA TABLA EDITABLE ---
 records = []
 for uid, name in user_names.items():
