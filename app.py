@@ -498,10 +498,14 @@ if records:
       .map(highlight_only_negatives, subset=["Dinero en caja (calculado)"])
   )
 
+  # Calculamos la altura dinamica segun la cantidad de filas (aprox. 35px por fila + cabecera)
+  table_height = (len(df_final) + 1) * 35 + 10
+
   st.dataframe(
       styled_df,
       use_container_width=True,
       hide_index=True,
+      height=table_height,
   )
 
   # --- GRÁFICO DE BARRAS PERSONALIZADO (PLOTLY) ---
