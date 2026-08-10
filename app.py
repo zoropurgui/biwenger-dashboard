@@ -439,9 +439,10 @@ if records:
       (max_bid_pct / 100.0) * df_final["Valor actual del equipo"]
   )
 
+  # Orden inicial predeterminado por 'Valor equipo + caja' desc
   df_final = df_final.sort_values("Valor equipo + caja", ascending=False)
 
-  cols_to_format = [
+  cols_num = [
       "Valor actual del equipo",
       "Valor de equipo día 1",
       "Dinero en caja (calculado)",
@@ -450,13 +451,30 @@ if records:
       "Puja máxima",
   ]
 
-  display_df = df_final.copy()
-  for col in cols_to_format:
-    display_df[col] = display_df[col].apply(
-        lambda x: f"{x:,.0f} €".replace(",", ".")
-    )
+  # Función para colorear de rojo únicamente el dinero en caja si es negativo
+  def color_negative_red(val):
+    color = "red" if isinstance(val, (int, float)) and val < 0 else "inherit"
+    return f"color: {color}; font-weight: {'bold' if color == 'red' else 'normal'};"
 
-  st.dataframe(display_df, use_container_width=True, hide_index=True)
+  # Creamos el Styler para aplicar el formato de color
+  styled_df = df_final[
+      ["Usuario"] + cols_num
+  ].style.map(  # Usar .applymap en versiones antiguas de pandas si fuera necesario
+      color_negative_red, subset=["Dinero en caja (calculado)"]
+  )
+
+  # Configuramos las columnas como numéricas para que la ordenación al hacer clic funcione correctamente
+  column_config = {
+      col: st.column_config.NumberColumn(col, format="%.0f €")
+      for col in cols_num
+  }
+
+  st.dataframe(
+      styled_df,
+      use_container_width=True,
+      hide_index=True,
+      column_config=column_config,
+  )
 
 else:
   st.warning("⚠️ No hay datos para mostrar en la tabla.")
@@ -465,9 +483,17 @@ st.markdown("---")
 st.subheader("📜 Historial de Traspasos, Primas y Movimientos Detectados")
 if detected_events_log:
   df_log = pd.DataFrame(detected_events_log)
-  df_log["Importe (€)"] = df_log["Importe (€)"].apply(
-      lambda x: f"{x:,.0f} €".replace(",", ".")
+
+  # Formateo numérico también para el historial para que se ordene bien
+  st.dataframe(
+      df_log,
+      use_container_width=True,
+      hide_index=True,
+      column_config={
+          "Importe (€)": st.column_config.NumberColumn(
+              "Importe (€)", format="%.0f €"
+          )
+      },
   )
-  st.dataframe(df_log, use_container_width=True, hide_index=True)
 else:
   st.info("ℹ️ No se han detectado movimientos recientes.")
