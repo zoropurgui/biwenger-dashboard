@@ -1,7 +1,7 @@
 import pandas as pd
+import pytesseract
 import requests
 import streamlit as st
-import pytesseract
 from PIL import Image
 
 st.set_page_config(
@@ -12,7 +12,9 @@ st.title("⚽ Monitor Financiero Biwenger")
 
 # --- SIDEBAR: Configuración ---
 token = st.sidebar.text_input("Bearer Token", type="password")
-uploaded_file = st.sidebar.file_uploader("📸 Sube captura de Biwenger", type=["png", "jpg", "jpeg"])
+uploaded_file = st.sidebar.file_uploader(
+    "📸 Sube captura de Biwenger", type=["png", "jpg", "jpeg"]
+)
 
 if not token:
   st.info("👈 Pega tu **Bearer Token** en la barra lateral para empezar.")
@@ -21,6 +23,7 @@ if not token:
 clean_token = token.strip().replace("Bearer ", "").strip()
 
 INITIAL_TOTAL = 40000000.0
+
 
 @st.cache_data(ttl=30)
 def load_data(t):
@@ -85,6 +88,7 @@ DAY_ONE_VALS = {
     "nitrorx": 21490000.0,
 }
 
+
 def get_day_one_val(name):
   n_lower = str(name).lower().strip()
   for d_key, d_v in DAY_ONE_VALS.items():
@@ -92,8 +96,11 @@ def get_day_one_val(name):
       return d_v
   return 21500000.0
 
+
 # --- EXTRACCIÓN DE DATOS DE LA LIGA ---
-league_data = league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
+league_data = (
+    league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
+)
 raw_list = []
 for key_name in ["standings", "users", "members"]:
   val = league_data.get(key_name)
@@ -129,122 +136,213 @@ if raw_list:
         if k in item and item[k] is not None:
           try:
             val = float(item[k])
-            if val > 0: t_val = val; break
-          except: pass
+            if val > 0:
+              t_val = val
+              break
+          except:
+            pass
       if t_val is None:
         for sub_key in ["team", "account", "user", "data"]:
           sub_obj = item.get(sub_key)
           if isinstance(sub_obj, dict):
-            for k in ["teamValue", "value", "marketValue", "price", "team_value"]:
+            for k in [
+                "teamValue",
+                "value",
+                "marketValue",
+                "price",
+                "team_value",
+            ]:
               if k in sub_obj and sub_obj[k] is not None:
                 try:
                   val = float(sub_obj[k])
-                  if val > 0: t_val = val; break
-                except: pass
-            if t_val is not None: break
-      if t_val is not None: current_vm_data[uid] = t_val
+                  if val > 0:
+                    t_val = val
+                    break
+                except:
+                  pass
+            if t_val is not None:
+              break
+      if t_val is not None:
+        current_vm_data[uid] = t_val
       extraction_debug_logs.append({"ID": uid, "Usuario": uname})
 
 # --- PROCESAMIENTO OCR MEJORADO (TESSERACT POR FILAS) ---
 if uploaded_file is not None:
-    st.write("🔍 Leyendo captura por filas con Tesseract...")
-    try:
-        img = Image.open(uploaded_file).convert('L')
-        data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
-        
-        rows = {}
-        for i in range(len(data['text'])):
-            text = data['text'][i].strip()
-            if not text:
-                continue
-            top = data['top'][i]
-            matched_row = None
-            for r_top in rows:
-                if abs(r_top - top) < 15:
-                    matched_row = r_top
-                    break
-            if matched_row is None:
-                rows[top] = []
-                matched_row = top
-            rows[matched_row].append(text)
-            
-        known_users = {str(name).lower().strip(): uid for uid, name in user_names.items()}
-        
-        for r_top, words in rows.items():
-            row_text = " ".join(words).lower()
-            
-            matched_uid = None
-            for u_name, uid in known_users.items():
-                parts = u_name.split()
-                if any(p in row_text for p in parts if len(p) > 2) or u_name in row_text:
-                    matched_uid = uid
-                    break
-                    
-            matched_val = None
-            for w in words:
-                clean_w = ''.join(c for c in w if c.isdigit())
-                if clean_w.isdigit() and len(clean_w) >= 6:
-                    val = float(clean_w)
-                    if 100000 <= val <= 1000000000:
-                        matched_val = val
-                        break
-                        
-            if matched_uid and matched_val:
-                current_vm_data[matched_uid] = matched_val
-                
-        st.success("✅ Valores actualizados correctamente desde la imagen.")
-    except Exception as e:
-        st.error(f"Error procesando la imagen: {e}")
+  st.write("🔍 Leyendo captura por filas con Tesseract...")
+  try:
+    img = Image.open(uploaded_file).convert("L")
+    data = pytesseract.image_to_data(img, output_type=pytesseract.Output.DICT)
+
+    rows = {}
+    for i in range(len(data["text"])):
+      text = data["text"][i].strip()
+      if not text:
+        continue
+      top = data["top"][i]
+      matched_row = None
+      for r_top in rows:
+        if abs(r_top - top) < 15:
+          matched_row = r_top
+          break
+      if matched_row is None:
+        rows[top] = []
+        matched_row = top
+      rows[matched_row].append(text)
+
+    known_users = {
+        str(name).lower().strip(): uid for uid, name in user_names.items()
+    }
+
+    for r_top, words in rows.items():
+      row_text = " ".join(words).lower()
+
+      matched_uid = None
+      for u_name, uid in known_users.items():
+        parts = u_name.split()
+        if (
+            any(p in row_text for p in parts if len(p) > 2)
+            or u_name in row_text
+        ):
+          matched_uid = uid
+          break
+
+      matched_val = None
+      for w in words:
+        clean_w = "".join(c for c in w if c.isdigit())
+        if clean_w.isdigit() and len(clean_w) >= 6:
+          val = float(clean_w)
+          if 100000 <= val <= 1000000000:
+            matched_val = val
+            break
+
+      if matched_uid and matched_val:
+        current_vm_data[matched_uid] = matched_val
+
+    st.success("✅ Valores actualizados correctamente desde la imagen.")
+  except Exception as e:
+    st.error(f"Error procesando la imagen: {e}")
 
 if not user_names:
   for name, val in DAY_ONE_VALS.items():
     uid = name.replace(" ", "_")
     user_names[uid] = name.title()
-    if uid not in current_vm_data: current_vm_data[uid] = val
+    if uid not in current_vm_data:
+      current_vm_data[uid] = val
 
 user_adjustments = {uid: 0.0 for uid in user_names.keys()}
 
 # --- PROCESAR TRANSFERENCIAS Y TABLÓN ---
 detected_events_log = []
+
+
 def add_money(uid, amt, desc):
   uid_str = str(uid)
   if uid_str in user_adjustments and amt > 0:
     user_adjustments[uid_str] += amt
-    detected_events_log.append({"Usuario": user_names.get(uid_str, uid_str), "Importe (€)": amt, "Descripción": desc})
+    detected_events_log.append({
+        "Usuario": user_names.get(uid_str, uid_str),
+        "Importe (€)": amt,
+        "Descripción": desc,
+    })
+
 
 def sub_money(uid, amt, desc):
   uid_str = str(uid)
   if uid_str in user_adjustments and amt > 0:
     user_adjustments[uid_str] -= amt
-    detected_events_log.append({"Usuario": user_names.get(uid_str, uid_str), "Importe (€)": -amt, "Descripción": desc})
+    detected_events_log.append({
+        "Usuario": user_names.get(uid_str, uid_str),
+        "Importe (€)": -amt,
+        "Descripción": desc,
+    })
 
-transfers = transfers_resp.get("data", []) if isinstance(transfers_resp, dict) else []
+
+def parse_entity_id(ent):
+  if isinstance(ent, dict):
+    return str(ent.get("id")) if ent.get("id") is not None else None
+  elif ent is not None:
+    return str(ent)
+  return None
+
+
+# 1. Endpoint /transfers
+transfers = (
+    transfers_resp.get("data", [])
+    if isinstance(transfers_resp, dict)
+    else []
+)
 if isinstance(transfers, list):
   for t in transfers:
-    if not isinstance(t, dict): continue
-    amt = float(t.get("amount", 0) or t.get("price", 0) or 0)
-    s = t.get("from"); b = t.get("to")
-    if isinstance(s, dict): s = s.get("id")
-    if isinstance(b, dict): b = b.get("id")
-    if s is not None: add_money(str(s), amt, "Venta de Jugador")
-    if b is not None: sub_money(str(b), amt, "Compra de Jugador")
+    if not isinstance(t, dict):
+      continue
+    amt = float(
+        t.get("amount", 0) or t.get("price", 0) or t.get("value", 0) or 0
+    )
+    s_id = parse_entity_id(t.get("from"))
+    b_id = parse_entity_id(t.get("to"))
 
+    if s_id and s_id in user_adjustments:
+      add_money(s_id, amt, "Venta de Jugador")
+    if b_id and b_id in user_adjustments:
+      sub_money(b_id, amt, "Compra de Jugador")
+
+# 2. Endpoint /board (Procesamiento global de cualquier intercambio económico)
 board = board_resp.get("data", []) if isinstance(board_resp, dict) else []
 if isinstance(board, list):
   for item in board:
-    if not isinstance(item, dict): continue
+    if not isinstance(item, dict):
+      continue
+    type_event = item.get("type", "evento")
     content = item.get("content")
     elements = content if isinstance(content, list) else [content]
+
     for el in elements:
-      if not isinstance(el, dict): continue
-      amt = float(el.get("amount", 0) or el.get("price", 0) or el.get("value", 0) or 0)
-      from_obj = el.get("from"); to_obj = el.get("to")
-      s_id = from_obj.get("id") if isinstance(from_obj, dict) else from_obj
-      b_id = to_obj.get("id") if isinstance(to_obj, dict) else to_obj
-      if s_id is not None and b_id is None and amt > 0: add_money(str(s_id), amt, "Venta Inmediata a Máquina")
-      elif s_id is not None and b_id is not None and amt > 0:
-        add_money(str(s_id), amt, "Venta entre mánagers")
-        sub_money(str(b_id), amt, "Compra entre mánagers")
+      if not isinstance(el, dict):
+        continue
+
+      # Extraer cualquier importe monetario
+      amt = float(
+          el.get("amount", 0)
+          or el.get("price", 0)
+          or el.get("value", 0)
+          or el.get("bonus", 0)
+          or 0
+      )
+      if amt <= 0:
+        continue
+
+      # Extraer todos los posibles identificadores de usuario
+      s_id = parse_entity_id(el.get("from"))
+      b_id = parse_entity_id(el.get("to"))
+      u_id_direct = parse_entity_id(el.get("user")) or parse_entity_id(
+          el.get("userID")
+      )
+
+      # Casos de uso:
+      # A) Movimiento entre dos mánagers (ej. Venta, compra o clausulazo)
+      if (
+          s_id
+          and b_id
+          and s_id in user_adjustments
+          and b_id in user_adjustments
+      ):
+        add_money(s_id, amt, f"Venta mánager ({type_event})")
+        sub_money(b_id, amt, f"Compra mánager ({type_event})")
+
+      # B) Venta a la máquina (o salida de fondos)
+      elif s_id and s_id in user_adjustments and not b_id:
+        add_money(s_id, amt, f"Venta a Mercado ({type_event})")
+
+      # C) Compra al mercado / Subasta
+      elif b_id and b_id in user_adjustments and not s_id:
+        sub_money(b_id, amt, f"Compra a Mercado ({type_event})")
+
+      # D) Primas, premios de jornada, bonificaciones manuales o penalizaciones
+      elif u_id_direct and u_id_direct in user_adjustments:
+        if amt > 0:
+          add_money(u_id_direct, amt, f"Abono / Prima ({type_event})")
+        else:
+          sub_money(u_id_direct, abs(amt), f"Penalización ({type_event})")
 
 # --- CONSTRUCCIÓN DE LA TABLA EDITABLE ---
 records = []
@@ -252,9 +350,9 @@ for uid, name in user_names.items():
   v_inicial = get_day_one_val(name)
   v_actual = current_vm_data.get(uid, v_inicial)
   ajuste = user_adjustments.get(uid, 0.0)
-  
+
   saldo_real = (INITIAL_TOTAL - v_inicial) + ajuste
-  
+
   records.append({
       "UID": uid,
       "Usuario": name,
@@ -266,33 +364,51 @@ for uid, name in user_names.items():
 
 if records:
   st.subheader("📊 Monitor Financiero en Directo")
-  st.write("✏️ *Actualiza o comprueba el 'Valor actual del equipo' reflejado por la captura.*")
-  
-  df_records = pd.DataFrame(records)
-  
-  df_editor_input = df_records[["Usuario", "Valor actual del equipo"]].copy()
-  
-  edited_df = st.data_editor(
-      df_editor_input, 
-      use_container_width=True, 
-      hide_index=True,
-      disabled=["Usuario"]
+  st.write(
+      "✏️ *Actualiza o comprueba el 'Valor actual del equipo' reflejado por la"
+      " captura.*"
   )
-  
+
+  df_records = pd.DataFrame(records)
+
+  df_editor_input = df_records[["Usuario", "Valor actual del equipo"]].copy()
+
+  edited_df = st.data_editor(
+      df_editor_input,
+      use_container_width=True,
+      hide_index=True,
+      disabled=["Usuario"],
+  )
+
   df_final = df_records.copy()
-  df_final["Valor actual del equipo"] = edited_df["Valor actual del equipo"].values
-  
-  df_final["Valor equipo + caja"] = df_final["Valor actual del equipo"] + df_final["Dinero en caja (calculado)"]
-  df_final["Puja máxima"] = df_final["Dinero en caja (calculado)"] + ((max_bid_pct / 100.0) * df_final["Valor actual del equipo"])
-  
+  df_final["Valor actual del equipo"] = (
+      edited_df["Valor actual del equipo"].values
+  )
+
+  df_final["Valor equipo + caja"] = (
+      df_final["Valor actual del equipo"] + df_final["Dinero en caja (calculado)"]
+  )
+  df_final["Puja máxima"] = df_final["Dinero en caja (calculado)"] + (
+      (max_bid_pct / 100.0) * df_final["Valor actual del equipo"]
+  )
+
   df_final = df_final.sort_values("Valor equipo + caja", ascending=False)
-  
-  cols_to_format = ["Valor actual del equipo", "Valor de equipo día 1", "Dinero en caja (calculado)", "Balance (ajuste)", "Valor equipo + caja", "Puja máxima"]
-  
+
+  cols_to_format = [
+      "Valor actual del equipo",
+      "Valor de equipo día 1",
+      "Dinero en caja (calculado)",
+      "Balance (ajuste)",
+      "Valor equipo + caja",
+      "Puja máxima",
+  ]
+
   display_df = df_final.copy()
   for col in cols_to_format:
-    display_df[col] = display_df[col].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
-    
+    display_df[col] = display_df[col].apply(
+        lambda x: f"{x:,.0f} €".replace(",", ".")
+    )
+
   st.dataframe(display_df, use_container_width=True, hide_index=True)
 
 else:
@@ -302,7 +418,9 @@ st.markdown("---")
 st.subheader("📜 Historial de Traspasos y Movimientos Detectados")
 if detected_events_log:
   df_log = pd.DataFrame(detected_events_log)
-  df_log["Importe (€)"] = df_log["Importe (€)"].apply(lambda x: f"{x:,.0f} €".replace(",", "."))
+  df_log["Importe (€)"] = df_log["Importe (€)"].apply(
+      lambda x: f"{x:,.0f} €".replace(",", ".")
+  )
   st.dataframe(df_log, use_container_width=True, hide_index=True)
 else:
   st.info("ℹ️ No se han detectado movimientos recientes.")
