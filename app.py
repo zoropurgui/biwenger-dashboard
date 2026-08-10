@@ -439,7 +439,7 @@ if records:
       (max_bid_pct / 100.0) * df_final["Valor actual del equipo"]
   )
 
-  # Orden inicial predeterminado por 'Valor equipo + caja' desc
+  # Orden inicial predeterminado por 'Valor equipo + caja' descendente
   df_final = df_final.sort_values("Valor equipo + caja", ascending=False)
 
   cols_num = [
@@ -451,29 +451,25 @@ if records:
       "Puja máxima",
   ]
 
-  # Función para colorear de rojo únicamente el dinero en caja si es negativo
-  def color_negative_red(val):
-    color = "red" if isinstance(val, (int, float)) and val < 0 else "inherit"
-    return f"color: {color}; font-weight: {'bold' if color == 'red' else 'normal'};"
+  # Función de estilo: solo aplica color rojo si el valor numérico es estrictamente menor a cero
+  def highlight_only_negatives(val):
+    if isinstance(val, (int, float)) and val < 0:
+      return "color: red; font-weight: bold;"
+    return ""
 
-  # Creamos el Styler para aplicar el formato de color
-  styled_df = df_final[
-      ["Usuario"] + cols_num
-  ].style.map(  # Usar .applymap en versiones antiguas de pandas si fuera necesario
-      color_negative_red, subset=["Dinero en caja (calculado)"]
+  # Aplicamos el formato con separador de miles (puntos) y moneda a todas las columnas numéricas
+  format_dict = {col: "{:,.0f} €" for col in cols_num}
+
+  styled_df = (
+      df_final[["Usuario"] + cols_num]
+      .style.format(format_dict, thousands=".", precision=0)
+      .map(highlight_only_negatives, subset=["Dinero en caja (calculado)"])
   )
-
-  # Configuramos las columnas como numéricas para que la ordenación al hacer clic funcione correctamente
-  column_config = {
-      col: st.column_config.NumberColumn(col, format="%.0f €")
-      for col in cols_num
-  }
 
   st.dataframe(
       styled_df,
       use_container_width=True,
       hide_index=True,
-      column_config=column_config,
   )
 
 else:
@@ -484,16 +480,12 @@ st.subheader("📜 Historial de Traspasos, Primas y Movimientos Detectados")
 if detected_events_log:
   df_log = pd.DataFrame(detected_events_log)
 
-  # Formateo numérico también para el historial para que se ordene bien
+  styled_log = df_log.style.format({"Importe (€)": "{:,.0f} €"}, thousands=".", precision=0)
+
   st.dataframe(
-      df_log,
+      styled_log,
       use_container_width=True,
       hide_index=True,
-      column_config={
-          "Importe (€)": st.column_config.NumberColumn(
-              "Importe (€)", format="%.0f €"
-          )
-      },
   )
 else:
   st.info("ℹ️ No se han detectado movimientos recientes.")
