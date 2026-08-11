@@ -8,7 +8,7 @@ import streamlit as st
 from PIL import Image
 
 st.set_page_config(
-    page_title="Monitor Financiero Biwenger", page_icon="⚽", layout="wide"
+  page_title="Monitor Financiero Biwenger", page_icon="⚽", layout="wide"
 )
 
 st.title("⚽ Monitor Financiero Biwenger")
@@ -38,7 +38,7 @@ def save_history(history_data):
 # --- SIDEBAR: Configuración ---
 token = st.sidebar.text_input("Bearer Token", type="password")
 uploaded_file = st.sidebar.file_uploader(
-    "📸 Sube captura de Biwenger", type=["png", "jpg", "jpeg"]
+  "📸 Sube captura de Biwenger", type=["png", "jpg", "jpeg"]
 )
 
 if not token:
@@ -91,12 +91,12 @@ def load_data(t):
 
 
 (
-    l_id,
-    u_id,
-    league_resp,
-    transfers_resp,
-    board_resp,
-    standings_resp,
+  l_id,
+  u_id,
+  league_resp,
+  transfers_resp,
+  board_resp,
+  standings_resp,
 ) = load_data(clean_token)
 if not l_id:
   st.error("❌ Error al conectar con la API de Biwenger. Comprueba tu token.")
@@ -109,34 +109,34 @@ if st.button("🔄 Recargar Datos"):
 
 # --- VALORES DE REFERENCIA / DÍA 1 Y ORDEN DE USUARIOS ---
 CUSTOM_USER_ORDER = [
-    "athletik81",
-    "ring014",
-    "tubu",
-    "marroba",
-    "yoqsetio xdxd",
-    "nitwolf",
-    "nistalikus",
-    "gran gravessen",
-    "moltisanti",
-    "zoropurgui",
-    "_caesar_",
-    "nitrorx",
+  "athletik81",
+  "ring014",
+  "tubu",
+  "marroba",
+  "yoqsetio xdxd",
+  "nitwolf",
+  "nistalikus",
+  "gran gravessen",
+  "moltisanti",
+  "zoropurgui",
+  "_caesar_",
+  "nitrorx",
 ]
 
 DAY_ONE_VALS = {
-    "athletik81": 21600000.0,
-    "ring014": 21580000.0,
-    "tubu": 21570000.0,
-    "marroba": 21560000.0,
-    "zhukkov": 21560000.0,
-    "nitwolf": 21550000.0,
-    "yoqsetio xdxd": 21550000.0,
-    "nistalikus": 21550000.0,
-    "moltisanti": 21540000.0,
-    "gran gravessen": 21540000.0,
-    "zoropurgui": 21530000.0,
-    "_caesar_": 21510000.0,
-    "nitrorx": 21490000.0,
+  "athletik81": 21600000.0,
+  "ring014": 21580000.0,
+  "tubu": 21570000.0,
+  "marroba": 21560000.0,
+  "zhukkov": 21560000.0,
+  "nitwolf": 21550000.0,
+  "yoqsetio xdxd": 21550000.0,
+  "nistalikus": 21550000.0,
+  "moltisanti": 21540000.0,
+  "gran gravessen": 21540000.0,
+  "zoropurgui": 21530000.0,
+  "_caesar_": 21510000.0,
+  "nitrorx": 21490000.0,
 }
 
 
@@ -160,15 +160,15 @@ def get_user_rank(name):
 raw_list = []
 
 s_data = (
-    standings_resp.get("data", [])
-    if isinstance(standings_resp, dict)
-    else standings_resp
+  standings_resp.get("data", [])
+  if isinstance(standings_resp, dict)
+  else standings_resp
 )
 if isinstance(s_data, list):
   raw_list.extend(s_data)
 
 l_data = (
-    league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
+  league_resp.get("data", {}) if isinstance(league_resp, dict) else {}
 )
 for key_name in ["standings", "users", "members"]:
   val = l_data.get(key_name)
@@ -280,6 +280,24 @@ if not user_names:
 
 # --- CARGAR HISTORIAL ACUMULADO ---
 stored_history = load_history()
+
+# ==============================================================================
+# 🛠 FIX DE DUPLICADOS EN HISTORIAL:
+# Buscar en el historial guardado todo lo que sea del tablón ("bd_...") 
+# pero que corresponda a traspasos ("transfer" o "market") y eliminarlo,
+# ya que esas operaciones ya están siendo contadas por el módulo de /transfers.
+# ==============================================================================
+keys_to_remove = []
+for k, v in stored_history.items():
+  if k.startswith("bd_"):
+    desc = v.get("description", "")
+    if "(transfer)" in desc or "(market)" in desc:
+      keys_to_remove.append(k)
+
+for k in keys_to_remove:
+  del stored_history[k]
+# ==============================================================================
+
 user_adjustments = {uid: 0.0 for uid in user_names.keys()}
 detected_events_log = []
 
@@ -303,11 +321,11 @@ def register_event(event_key, uid, amt, desc):
     }
 
 
-# 1. Procesar /transfers
+# 1. Procesar /transfers (LA FUENTE FIABLE PARA TRASPASOS)
 transfers = (
-    transfers_resp.get("data", [])
-    if isinstance(transfers_resp, dict)
-    else []
+  transfers_resp.get("data", [])
+  if isinstance(transfers_resp, dict)
+  else []
 )
 if isinstance(transfers, list):
   for i, t in enumerate(transfers):
@@ -327,14 +345,21 @@ if isinstance(transfers, list):
     if b_id and b_id in user_adjustments:
       register_event(f"tr_b_{t_id}", b_id, -amt, "Compra de Jugador")
 
-# 2. Procesar /board
+# 2. Procesar /board (SOLO PARA PRIMAS, ABONOS, MULTAS, ETC.)
 board = board_resp.get("data", []) if isinstance(board_resp, dict) else []
 if isinstance(board, list):
   for i, item in enumerate(board):
     if not isinstance(item, dict):
       continue
-    b_id_base = str(item.get("id") or f"bd_{item.get('date', '')}_{i}")
+    
     type_event = item.get("type", "evento")
+    
+    # 🛠 FIX: Si el evento del tablón es de traspaso, LO IGNORAMOS, 
+    # ya que se procesó correctamente en el bloque superior de /transfers.
+    if type_event in ["transfer", "market"]:
+      continue
+      
+    b_id_base = str(item.get("id") or f"bd_{item.get('date', '')}_{i}")
     content = item.get("content")
     elements = content if isinstance(content, list) else [content]
 
@@ -389,7 +414,7 @@ if isinstance(board, list):
             f"Prima / Abono ({type_event})",
         )
 
-# Guardar eventos consolidados
+# Guardar eventos consolidados (ya limpiados)
 save_history(stored_history)
 
 # Calcular sumatorios de los eventos almacenados
@@ -407,7 +432,7 @@ for ev_id, ev_data in stored_history.items():
 
 # --- CORRECCIÓN MANUAL PERMANENTE (-280.000 € A YOQSETIO XDXD) ---
 MANUAL_CORRECTIONS = {
-    "yoqsetio xdxd": -280000.0,
+  "yoqsetio xdxd": -280000.0,
 }
 
 for uid, name in user_names.items():
@@ -523,7 +548,7 @@ if records:
   fig.update_traces(
       texttemplate="%{text:,.0f} €",
       textposition="outside",
-      width=0.3,  # Ajusta la anchura para hacer las barras más delgadas
+      width=0.3,
   )
 
   fig.update_layout(
@@ -555,4 +580,3 @@ if detected_events_log:
   )
 else:
   st.info("ℹ️ No se han detectado movimientos recientes.")
-    
