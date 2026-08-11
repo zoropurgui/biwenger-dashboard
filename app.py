@@ -555,3 +555,4 @@ if detected_events_log:
   )
 else:
   st.info("ℹ️ No se han detectado movimientos recientes.")
+    
