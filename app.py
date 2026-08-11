@@ -16,6 +16,14 @@ st.title("⚽ Monitor Financiero Biwenger")
 # --- HISTORIAL PERSISTENTE EN DISCO ---
 HISTORY_FILE = "biwenger_history.json"
 
+# --- BOTÓN DE EMERGENCIA PARA RESETEAR ---
+if st.sidebar.button("⚠️ RESETEAR HISTORIAL (Borrar JSON)"):
+    if os.path.exists(HISTORY_FILE):
+        os.remove(HISTORY_FILE)
+        st.success("Historial borrado. Recargando...")
+        st.rerun()
+    else:
+        st.warning("No se encontró el archivo de historial para borrar.")
 
 def load_history():
   if os.path.exists(HISTORY_FILE):
@@ -278,8 +286,10 @@ if not user_names:
     if uid not in current_vm_data:
       current_vm_data[uid] = val
 
+
 # --- CARGAR HISTORIAL ACUMULADO ---
 stored_history = load_history()
+
 user_adjustments = {uid: 0.0 for uid in user_names.keys()}
 detected_events_log = []
 
@@ -313,8 +323,10 @@ if isinstance(transfers, list):
   for i, t in enumerate(transfers):
     if not isinstance(t, dict):
       continue
+      
+    # CORRECCIÓN: Quitamos la 'i' del fallback de la ID. Usamos amount para que sea fijo.
     t_id = str(
-        t.get("id") or f"tr_{t.get('date', '')}_{i}_{t.get('amount', 0)}"
+        t.get("id") or f"tr_{t.get('date', '')}_{t.get('amount', 0)}"
     )
     amt = float(
         t.get("amount", 0) or t.get("price", 0) or t.get("value", 0) or 0
@@ -333,8 +345,12 @@ if isinstance(board, list):
   for i, item in enumerate(board):
     if not isinstance(item, dict):
       continue
-    b_id_base = str(item.get("id") or f"bd_{item.get('date', '')}_{i}")
+      
     type_event = item.get("type", "evento")
+    
+    # CORRECCIÓN: Quitamos la 'i' del fallback de la ID para que no duplique si baja posiciones
+    b_id_base = str(item.get("id") or f"bd_{item.get('date', '')}_{type_event}")
+    
     content = item.get("content")
     elements = content if isinstance(content, list) else [content]
 
@@ -523,7 +539,7 @@ if records:
   fig.update_traces(
       texttemplate="%{text:,.0f} €",
       textposition="outside",
-      width=0.3,  # Ajusta la anchura para hacer las barras más delgadas
+      width=0.3,
   )
 
   fig.update_layout(
