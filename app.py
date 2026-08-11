@@ -278,37 +278,8 @@ if not user_names:
     if uid not in current_vm_data:
       current_vm_data[uid] = val
 
-
 # --- CARGAR HISTORIAL ACUMULADO ---
 stored_history = load_history()
-
-# === NUEVO: LIMPIEZA SEGURA DE DUPLICADOS EXACTOS ===
-# Esto purgará automáticamente los millones de euros duplicados generados hoy 
-# por el desplazamiento del índice 'i', sin borrar ni afectar a tus datos reales.
-historico_limpio = {}
-firmas_vistas = set()
-
-for k, v in stored_history.items():
-    uid_eval = str(v.get("uid"))
-    amt_eval = str(v.get("amount"))
-    desc_eval = str(v.get("description"))
-    
-    # Extraemos el timestamp base de la ID corrupta para agrupar las copias de un mismo evento
-    timestamp = ""
-    for parte in k.split("_"):
-        if parte.isdigit() and len(parte) >= 9:
-            timestamp = parte
-            break
-            
-    firma = f"{uid_eval}_{amt_eval}_{desc_eval}_{timestamp}"
-    
-    if firma not in firmas_vistas:
-        firmas_vistas.add(firma)
-        historico_limpio[k] = v
-
-stored_history = historico_limpio
-# ======================================================
-
 user_adjustments = {uid: 0.0 for uid in user_names.keys()}
 detected_events_log = []
 
@@ -342,10 +313,8 @@ if isinstance(transfers, list):
   for i, t in enumerate(transfers):
     if not isinstance(t, dict):
       continue
-      
-    # CORRECCIÓN: Quitamos la 'i' del fallback de la ID. Usamos amount para que sea fijo.
     t_id = str(
-        t.get("id") or f"tr_{t.get('date', '')}_{t.get('amount', 0)}"
+        t.get("id") or f"tr_{t.get('date', '')}_{i}_{t.get('amount', 0)}"
     )
     amt = float(
         t.get("amount", 0) or t.get("price", 0) or t.get("value", 0) or 0
@@ -364,12 +333,8 @@ if isinstance(board, list):
   for i, item in enumerate(board):
     if not isinstance(item, dict):
       continue
-      
+    b_id_base = str(item.get("id") or f"bd_{item.get('date', '')}_{i}")
     type_event = item.get("type", "evento")
-    
-    # CORRECCIÓN: Quitamos la 'i' del fallback de la ID para que no duplique si baja posiciones
-    b_id_base = str(item.get("id") or f"bd_{item.get('date', '')}_{type_event}")
-    
     content = item.get("content")
     elements = content if isinstance(content, list) else [content]
 
@@ -558,7 +523,7 @@ if records:
   fig.update_traces(
       texttemplate="%{text:,.0f} €",
       textposition="outside",
-      width=0.3, 
+      width=0.3,  # Ajusta la anchura para hacer las barras más delgadas
   )
 
   fig.update_layout(
