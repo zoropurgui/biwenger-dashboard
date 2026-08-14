@@ -1,5 +1,7 @@
+Python
 import json
 import os
+import re
 import pandas as pd
 import plotly.express as px
 import pytesseract
@@ -18,12 +20,13 @@ HISTORY_FILE = "biwenger_history.json"
 
 # --- BOTÓN DE EMERGENCIA PARA RESETEAR ---
 if st.sidebar.button("⚠️ RESETEAR HISTORIAL (Borrar JSON)"):
-    if os.path.exists(HISTORY_FILE):
-        os.remove(HISTORY_FILE)
-        st.success("Historial borrado. Recargando...")
-        st.rerun()
-    else:
-        st.warning("No se encontró el archivo de historial para borrar.")
+  if os.path.exists(HISTORY_FILE):
+    os.remove(HISTORY_FILE)
+    st.success("Historial borrado. Recargando...")
+    st.rerun()
+  else:
+    st.warning("No se encontró el archivo de historial para borrar.")
+
 
 def load_history():
   if os.path.exists(HISTORY_FILE):
@@ -302,15 +305,43 @@ def parse_entity_id(ent):
   return None
 
 
-def register_event(event_key, uid, amt, desc):
-  """Registra un evento solo si no existía ya en la base de datos local."""
-  if event_key not in stored_history:
+def register_event(event_key, uid, amt, desc, overwrite=False):
+  """Registra un evento o lo actualiza si overwrite es True."""
+  if event_key not in stored_history or overwrite:
     stored_history[event_key] = {
         "uid": str(uid),
         "amount": amt,
         "description": desc,
         "user_name": user_names.get(str(uid), str(uid)),
     }
+
+
+def extract_round_id(item, el):
+  """Extrae el número o identificador de jornada/round si está disponible."""
+  rnd = item.get("round") or el.get("round")
+  if isinstance(rnd, dict):
+    r_val = rnd.get("id") or rnd.get("name") or rnd.get("round")
+    if r_val:
+      str_val = str(r_val).strip()
+      match = re.search(r"\d+", str_val)
+      if match:
+        return match.group(0)
+      return str_val
+  elif rnd is not None and str(rnd).strip():
+    str_val = str(rnd).strip()
+    match = re.search(r"\d+", str_val)
+    if match:
+      return match.group(0)
+    return str_val
+
+  title = str(
+      item.get("title", "") or item.get("name", "") or item.get("text", "")
+  ).lower()
+  if "jornada" in title or "round" in title:
+    match = re.search(r"(?:jornada|round)\s*(\d+)", title)
+    if match:
+      return match.group(1)
+  return None
 
 
 # 1. Procesar /transfers
@@ -323,8 +354,7 @@ if isinstance(transfers, list):
   for i, t in enumerate(transfers):
     if not isinstance(t, dict):
       continue
-      
-    # CORRECCIÓN: Quitamos la 'i' del fallback de la ID. Usamos amount para que sea fijo.
+
     t_id = str(
         t.get("id") or f"tr_{t.get('date', '')}_{t.get('amount', 0)}"
     )
@@ -339,18 +369,17 @@ if isinstance(transfers, list):
     if b_id and b_id in user_adjustments:
       register_event(f"tr_b_{t_id}", b_id, -amt, "Compra de Jugador")
 
-# 2. Procesar /board
+# 2. Procesar /board (Muro de la liga)
 board = board_resp.get("data", []) if isinstance(board_resp, dict) else []
 if isinstance(board, list):
   for i, item in enumerate(board):
     if not isinstance(item, dict):
       continue
-      
+
     type_event = item.get("type", "evento")
-    
-    # CORRECCIÓN: Quitamos la 'i' del fallback de la ID para que no duplique si baja posiciones
+    has_real_id = bool(item.get("id"))
     b_id_base = str(item.get("id") or f"bd_{item.get('date', '')}_{type_event}")
-    
+
     content = item.get("content")
     elements = content if isinstance(content, list) else [content]
 
@@ -377,6 +406,11 @@ if isinstance(board, list):
           or parse_entity_id(el.get("id"))
       )
 
+      rnd_id = extract_round_id(item, el)
+      is_round_bonus = (
+          type_event in ["round", "roundBonus", "bonus"] or rnd_id is not None
+      )
+
       if (
           s_id
           and b_id
@@ -384,26 +418,47 @@ if isinstance(board, list):
           and b_id in user_adjustments
       ):
         register_event(
-            f"bd_s_{b_id_base}_{j}", s_id, amt, f"Venta mánager ({type_event})"
+            f"bd_s_{b_id_base}_{j}",
+            s_id,
+            amt,
+            f"Venta mánager ({type_event})",
+            overwrite=has_real_id,
         )
         register_event(
-            f"bd_b_{b_id_base}_{j}", b_id, -amt, f"Compra mánager ({type_event})"
+            f"bd_b_{b_id_base}_{j}",
+            b_id,
+            -amt,
+            f"Compra mánager ({type_event})",
+            overwrite=has_real_id,
         )
       elif s_id and s_id in user_adjustments and not b_id:
         register_event(
-            f"bd_s_{b_id_base}_{j}", s_id, amt, f"Venta a Mercado ({type_event})"
+            f"bd_s_{b_id_base}_{j}",
+            s_id,
+            amt,
+            f"Venta a Mercado ({type_event})",
+            overwrite=has_real_id,
         )
       elif b_id and b_id in user_adjustments and not s_id:
         register_event(
-            f"bd_b_{b_id_base}_{j}", b_id, -amt, f"Compra a Mercado ({type_event})"
+            f"bd_b_{b_id_base}_{j}",
+            b_id,
+            -amt,
+            f"Compra a Mercado ({type_event})",
+            overwrite=has_real_id,
         )
       elif u_id_direct and u_id_direct in user_adjustments:
-        register_event(
-            f"bd_u_{b_id_base}_{j}",
-            u_id_direct,
-            amt,
-            f"Prima / Abono ({type_event})",
-        )
+        if is_round_bonus and rnd_id:
+          # Clave fija vinculada al número de jornada y al mánager para actualizar primas aplazadas
+          event_key = f"bd_round_{rnd_id}_{u_id_direct}"
+          desc = f"Prima Jornada {rnd_id}"
+          register_event(event_key, u_id_direct, amt, desc, overwrite=True)
+        else:
+          event_key = f"bd_u_{b_id_base}_{j}"
+          desc = f"Prima / Abono ({type_event})"
+          register_event(
+              event_key, u_id_direct, amt, desc, overwrite=has_real_id
+          )
 
 # Guardar eventos consolidados
 save_history(stored_history)
