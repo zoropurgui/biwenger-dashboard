@@ -32,18 +32,8 @@ def load_history():
     try:
       with open(HISTORY_FILE, "r", encoding="utf-8") as f:
         data = json.load(f)
-        # Limpieza automática de duplicados de fichajes que venían del muro en versiones anteriores
-        cleaned = {}
-        for k, v in data.items():
-          desc = v.get("description", "")
-          # Si el evento proviene del muro (bd_) y es una compra/venta, se descarta
-          # porque /transfers (tr_) ya la contabiliza oficialmente.
-          if k.startswith("bd_") and (
-              "Venta" in desc or "Compra" in desc or "Mercado" in desc
-          ):
-            continue
-          cleaned[k] = v
-        return cleaned
+        # Limpiar registros obsoletos de la API /transfers para usar solo el muro
+        return {k: v for k, v in data.items() if not k.startswith("tr_")}
     except Exception:
       return {}
   return {}
@@ -81,7 +71,7 @@ def load_data(t):
     ).json()
     leagues = acc.get("data", {}).get("leagues", [])
     if not leagues:
-      return None, None, {}, {}, {}, {}
+      return None, None, {}, {}, {}
 
     l = leagues[0]
     l_id = l.get("id")
@@ -98,26 +88,20 @@ def load_data(t):
         f"https://biwenger.as.com/api/v2/league/{l_id}/standings",
         headers=h_league,
     ).json()
-    # Aumentado limit=500 para abarcar todo el historial de fichajes
-    r_transfers = requests.get(
-        f"https://biwenger.as.com/api/v2/league/{l_id}/transfers?limit=500",
-        headers=h_league,
-    ).json()
     r_board = requests.get(
         f"https://biwenger.as.com/api/v2/league/{l_id}/board?limit=500",
         headers=h_league,
     ).json()
 
-    return l_id, u_id, r_league, r_transfers, r_board, r_standings
+    return l_id, u_id, r_league, r_board, r_standings
   except Exception as e:
-    return None, None, {"error": str(e)}, {}, {}, {}
+    return None, None, {"error": str(e)}, {}, {}
 
 
 (
     l_id,
     u_id,
     league_resp,
-    transfers_resp,
     board_resp,
     standings_resp,
 ) = load_data(clean_token)
@@ -179,7 +163,7 @@ def get_user_rank(name):
   return 999
 
 
-# --- EXTRACCIÓN DE DATOS DE LA LIGA Y STANDINGS ---
+# --- EXTRACCIÓN Y MAPEO UNIVERSAL DE USUARIOS ---
 raw_list = []
 
 s_data = (
@@ -201,6 +185,7 @@ for key_name in ["standings", "users", "members"]:
     raw_list.extend(list(val.values()))
 
 user_names = {}
+user_lookup = {}
 current_vm_data = {}
 
 for item in raw_list:
@@ -212,11 +197,17 @@ for item in raw_list:
     uid = item.get("user").get("id")
     uname = item.get("user").get("name") or item.get("user").get("username")
 
-  if uname:
-    uid_str = str(uid) if uid is not None else str(uname).lower().strip()
-    uname_clean = str(uname).lower().strip()
+  if uid is not None or uname:
+    canonical_uid = str(uid) if uid is not None else str(uname).lower().strip()
+    display_name = str(uname) if uname else canonical_uid
 
-    user_names[uid_str] = uname
+    user_names[canonical_uid] = display_name
+
+    if uid is not None:
+      user_lookup[str(uid)] = canonical_uid
+    if uname:
+      user_lookup[str(uname).lower().strip()] = canonical_uid
+      user_lookup[str(uname).strip()] = canonical_uid
 
     t_val = None
     for k in ["teamValue", "value", "marketValue", "price", "team_value"]:
@@ -230,8 +221,30 @@ for item in raw_list:
           pass
 
     if t_val is not None:
-      current_vm_data[uid_str] = t_val
-      current_vm_data[uname_clean] = t_val
+      current_vm_data[canonical_uid] = t_val
+
+
+def resolve_user(ent):
+  """Resuelve cualquier representación de mánager al ID canónico."""
+  if ent is None:
+    return None
+  if isinstance(ent, dict):
+    eid = ent.get("id")
+    if eid is not None and str(eid) in user_lookup:
+      return user_lookup[str(eid)]
+    ename = ent.get("name") or ent.get("username")
+    if ename and str(ename).lower().strip() in user_lookup:
+      return user_lookup[str(ename).lower().strip()]
+    if isinstance(ent.get("user"), dict):
+      return resolve_user(ent.get("user"))
+    return None
+  ent_str = str(ent).strip()
+  if ent_str in user_lookup:
+    return user_lookup[ent_str]
+  if ent_str.lower() in user_lookup:
+    return user_lookup[ent_str.lower()]
+  return None
+
 
 # --- PROCESAMIENTO OCR MEJORADO (TESSERACT POR FILAS) ---
 if uploaded_file is not None:
@@ -256,23 +269,13 @@ if uploaded_file is not None:
         matched_row = top
       rows[matched_row].append(text)
 
-    known_users = {
-        str(name).lower().strip(): uid for uid, name in user_names.items()
-    }
-
     for r_top, words in rows.items():
       row_text = " ".join(words).lower()
 
       matched_uid = None
-      matched_uname = None
-      for u_name, uid in known_users.items():
-        parts = u_name.split()
-        if (
-            any(p in row_text for p in parts if len(p) > 2)
-            or u_name in row_text
-        ):
+      for u_name_key, uid in user_lookup.items():
+        if u_name_key in row_text and len(u_name_key) > 2:
           matched_uid = uid
-          matched_uname = u_name
           break
 
       matched_val = None
@@ -284,11 +287,8 @@ if uploaded_file is not None:
             matched_val = val
             break
 
-      if matched_val:
-        if matched_uid:
-          current_vm_data[matched_uid] = matched_val
-        if matched_uname:
-          current_vm_data[matched_uname] = matched_val
+      if matched_val and matched_uid:
+        current_vm_data[matched_uid] = matched_val
 
     st.success("✅ Valores actualizados correctamente desde la imagen.")
   except Exception as e:
@@ -298,53 +298,42 @@ if not user_names:
   for name, val in DAY_ONE_VALS.items():
     uid = name.replace(" ", "_")
     user_names[uid] = name.title()
+    user_lookup[name.lower()] = uid
     if uid not in current_vm_data:
       current_vm_data[uid] = val
 
 
-# --- CARGAR HISTORIAL ACUMULADO Y LIMPIAR DUPLICADOS ---
+# --- CARGAR Y PROCESAR HISTORIAL DEL MURO ---
 stored_history = load_history()
-
 user_adjustments = {uid: 0.0 for uid in user_names.keys()}
 detected_events_log = []
 
 
-def parse_entity_id(ent):
-  if isinstance(ent, dict):
-    return str(ent.get("id")) if ent.get("id") is not None else None
-  elif ent is not None:
-    return str(ent)
-  return None
-
-
 def register_event(event_key, uid, amt, desc, overwrite=False):
-  """Registra un evento o lo actualiza si overwrite es True."""
-  if event_key not in stored_history or overwrite:
-    stored_history[event_key] = {
-        "uid": str(uid),
-        "amount": amt,
-        "description": desc,
-        "user_name": user_names.get(str(uid), str(uid)),
-    }
+  """Registra un evento financiero."""
+  if uid in user_adjustments:
+    if event_key not in stored_history or overwrite:
+      stored_history[event_key] = {
+          "uid": str(uid),
+          "amount": amt,
+          "description": desc,
+          "user_name": user_names.get(str(uid), str(uid)),
+      }
 
 
 def extract_round_id(item, el):
-  """Extrae el número o identificador de jornada/round si está disponible."""
+  """Extrae el número de jornada."""
   rnd = item.get("round") or el.get("round")
   if isinstance(rnd, dict):
     r_val = rnd.get("id") or rnd.get("name") or rnd.get("round")
     if r_val:
-      str_val = str(r_val).strip()
-      match = re.search(r"\d+", str_val)
+      match = re.search(r"\d+", str(r_val))
       if match:
         return match.group(0)
-      return str_val
   elif rnd is not None and str(rnd).strip():
-    str_val = str(rnd).strip()
-    match = re.search(r"\d+", str_val)
+    match = re.search(r"\d+", str(rnd))
     if match:
       return match.group(0)
-    return str_val
 
   title = str(
       item.get("title", "") or item.get("name", "") or item.get("text", "")
@@ -356,47 +345,16 @@ def extract_round_id(item, el):
   return None
 
 
-# 1. Procesar /transfers (Fuente oficial de compras y ventas)
-transfers = (
-    transfers_resp.get("data", [])
-    if isinstance(transfers_resp, dict)
-    else []
-)
-if isinstance(transfers, list):
-  for i, t in enumerate(transfers):
-    if not isinstance(t, dict):
-      continue
-
-    t_id = str(
-        t.get("id") or f"tr_{t.get('date', '')}_{t.get('amount', 0)}"
-    )
-    amt = float(
-        t.get("amount", 0) or t.get("price", 0) or t.get("value", 0) or 0
-    )
-    s_id = parse_entity_id(t.get("from"))
-    b_id = parse_entity_id(t.get("to"))
-
-    if s_id and s_id in user_adjustments:
-      register_event(f"tr_s_{t_id}", s_id, amt, "Venta de Jugador")
-    if b_id and b_id in user_adjustments:
-      register_event(f"tr_b_{t_id}", b_id, -amt, "Compra de Jugador")
-
-# 2. Procesar /board (Muro de la liga: SOLO primas, abonos y bonificaciones)
-TRANSFER_EVENT_TYPES = {"transfer", "transfers", "market", "clause"}
-
+# PROCESAR EL MURO DE LA LIGA (Fuente principal de eventos)
 board = board_resp.get("data", []) if isinstance(board_resp, dict) else []
 if isinstance(board, list):
-  for i, item in enumerate(board):
+  for item in board:
     if not isinstance(item, dict):
       continue
 
     type_event = item.get("type", "evento")
-    # TAREA CLAVE: Ignorar eventos de fichajes/mercado del muro para NO duplicar con /transfers
-    if type_event in TRANSFER_EVENT_TYPES:
-      continue
-
     has_real_id = bool(item.get("id"))
-    b_id_base = str(item.get("id") or f"bd_{item.get('date', '')}_{type_event}")
+    item_id = str(item.get("id") or f"bd_{item.get('date', '')}_{type_event}")
 
     content = item.get("content")
     elements = content if isinstance(content, list) else [content]
@@ -416,11 +374,12 @@ if isinstance(board, list):
       if amt <= 0:
         continue
 
+      s_id = resolve_user(el.get("from"))
+      b_id = resolve_user(el.get("to"))
       u_id_direct = (
-          parse_entity_id(el.get("user"))
-          or parse_entity_id(el.get("userID"))
-          or parse_entity_id(el.get("id"))
-          or parse_entity_id(el.get("to"))
+          resolve_user(el.get("user"))
+          or resolve_user(el.get("userID"))
+          or resolve_user(el.get("id"))
       )
 
       rnd_id = extract_round_id(item, el)
@@ -428,23 +387,72 @@ if isinstance(board, list):
           type_event in ["round", "roundBonus", "bonus"] or rnd_id is not None
       )
 
-      if u_id_direct and u_id_direct in user_adjustments:
-        if is_round_bonus and rnd_id:
-          # Clave fija vinculada al número de jornada y al mánager para actualizar primas aplazadas
-          event_key = f"bd_round_{rnd_id}_{u_id_direct}"
-          desc = f"Prima Jornada {rnd_id}"
-          register_event(event_key, u_id_direct, amt, desc, overwrite=True)
-        else:
-          event_key = f"bd_u_{b_id_base}_{j}"
-          desc = f"Prima / Abono ({type_event})"
+      # 1. Movimientos de Mercado / Fichajes / Cláusulas
+      if type_event in ["transfer", "transfers", "market", "clause"] or (
+          s_id or b_id
+      ):
+        if s_id and b_id:
           register_event(
-              event_key, u_id_direct, amt, desc, overwrite=has_real_id
+              f"bd_s_{item_id}_{j}",
+              s_id,
+              amt,
+              "Venta a mánager",
+              overwrite=has_real_id,
+          )
+          register_event(
+              f"bd_b_{item_id}_{j}",
+              b_id,
+              -amt,
+              "Compra de mánager",
+              overwrite=has_real_id,
+          )
+        elif s_id and not b_id:
+          register_event(
+              f"bd_s_{item_id}_{j}",
+              s_id,
+              amt,
+              "Venta a Mercado",
+              overwrite=has_real_id,
+          )
+        elif b_id and not s_id:
+          register_event(
+              f"bd_b_{item_id}_{j}",
+              b_id,
+              -amt,
+              "Compra de Mercado",
+              overwrite=has_real_id,
+          )
+        elif u_id_direct:
+          register_event(
+              f"bd_u_{item_id}_{j}",
+              u_id_direct,
+              amt,
+              f"Movimiento ({type_event})",
+              overwrite=has_real_id,
           )
 
-# Guardar eventos consolidados
+      # 2. Primas por Jornada
+      elif is_round_bonus and rnd_id:
+        u_target = u_id_direct or b_id or s_id
+        if u_target:
+          event_key = f"bd_round_{rnd_id}_{u_target}"
+          desc = f"Prima Jornada {rnd_id}"
+          register_event(event_key, u_target, amt, desc, overwrite=True)
+
+      # 3. Abonos / Primas manuales
+      else:
+        u_target = u_id_direct or b_id or s_id
+        if u_target:
+          event_key = f"bd_u_{item_id}_{j}"
+          desc = f"Prima / Abono ({type_event})"
+          register_event(
+              event_key, u_target, amt, desc, overwrite=has_real_id
+          )
+
+# Guardar historial consolidado
 save_history(stored_history)
 
-# Calcular sumatorios de los eventos almacenados
+# Sumar importes para cada mánager
 for ev_id, ev_data in stored_history.items():
   uid = ev_data.get("uid")
   amt = ev_data.get("amount", 0.0)
@@ -468,18 +476,11 @@ for uid, name in user_names.items():
     if target_key in name_lower:
       user_adjustments[uid] += correction_amt
 
-# --- CONSTRUCCIÓN DE LA TABLA EDITABLE ---
+# --- CONSTRUCCIÓN DE LA TABLA PRINCIPAL ---
 records = []
 for uid, name in user_names.items():
   v_inicial = get_day_one_val(name)
-  name_clean = str(name).lower().strip()
-
-  v_actual = (
-      current_vm_data.get(uid)
-      or current_vm_data.get(name_clean)
-      or v_inicial
-  )
-
+  v_actual = current_vm_data.get(uid, v_inicial)
   ajuste = user_adjustments.get(uid, 0.0)
   saldo_real = (INITIAL_TOTAL - v_inicial) + ajuste
 
@@ -500,7 +501,6 @@ if records:
   )
 
   df_records = pd.DataFrame(records)
-
   df_editor_input = df_records[["Usuario", "Valor actual del equipo"]].copy()
 
   edited_df = st.data_editor(
@@ -514,7 +514,6 @@ if records:
   df_final["Valor actual del equipo"] = (
       edited_df["Valor actual del equipo"].values
   )
-
   df_final["Valor equipo + caja"] = (
       df_final["Valor actual del equipo"] + df_final["Dinero en caja (calculado)"]
   )
@@ -522,7 +521,6 @@ if records:
       (max_bid_pct / 100.0) * df_final["Valor actual del equipo"]
   )
 
-  # Ordenar segun el listado especificado en la imagen
   df_final["rank_custom"] = df_final["Usuario"].apply(get_user_rank)
   df_final = df_final.sort_values("rank_custom", ascending=True).drop(
       columns=["rank_custom"]
@@ -550,7 +548,6 @@ if records:
       .map(highlight_only_negatives, subset=["Dinero en caja (calculado)"])
   )
 
-  # Calculamos la altura dinamica segun la cantidad de filas (aprox. 35px por fila + cabecera)
   table_height = (len(df_final) + 1) * 35 + 10
 
   st.dataframe(
@@ -560,7 +557,7 @@ if records:
       height=table_height,
   )
 
-  # --- GRÁFICO DE BARRAS PERSONALIZADO (PLOTLY) ---
+  # --- GRÁFICO DE BARRAS ---
   st.markdown("---")
   st.subheader("📈 Comparativa: Valor del Equipo + Caja")
 
@@ -595,11 +592,9 @@ st.markdown("---")
 st.subheader("📜 Historial de Traspasos, Primas y Movimientos Detectados")
 if detected_events_log:
   df_log = pd.DataFrame(detected_events_log)
-
   styled_log = df_log.style.format(
       {"Importe (€)": "{:,.0f} €"}, thousands=".", precision=0
   )
-
   st.dataframe(
       styled_log,
       use_container_width=True,
