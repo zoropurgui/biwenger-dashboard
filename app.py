@@ -31,7 +31,19 @@ def load_history():
   if os.path.exists(HISTORY_FILE):
     try:
       with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+        data = json.load(f)
+        # Limpieza automática de duplicados de fichajes que venían del muro en versiones anteriores
+        cleaned = {}
+        for k, v in data.items():
+          desc = v.get("description", "")
+          # Si el evento proviene del muro (bd_) y es una compra/venta, se descarta
+          # porque /transfers (tr_) ya la contabiliza oficialmente.
+          if k.startswith("bd_") and (
+              "Venta" in desc or "Compra" in desc or "Mercado" in desc
+          ):
+            continue
+          cleaned[k] = v
+        return cleaned
     except Exception:
       return {}
   return {}
@@ -86,12 +98,13 @@ def load_data(t):
         f"https://biwenger.as.com/api/v2/league/{l_id}/standings",
         headers=h_league,
     ).json()
+    # Aumentado limit=500 para abarcar todo el historial de fichajes
     r_transfers = requests.get(
-        f"https://biwenger.as.com/api/v2/league/{l_id}/transfers?limit=100",
+        f"https://biwenger.as.com/api/v2/league/{l_id}/transfers?limit=500",
         headers=h_league,
     ).json()
     r_board = requests.get(
-        f"https://biwenger.as.com/api/v2/league/{l_id}/board?limit=100",
+        f"https://biwenger.as.com/api/v2/league/{l_id}/board?limit=500",
         headers=h_league,
     ).json()
 
@@ -289,7 +302,7 @@ if not user_names:
       current_vm_data[uid] = val
 
 
-# --- CARGAR HISTORIAL ACUMULADO ---
+# --- CARGAR HISTORIAL ACUMULADO Y LIMPIAR DUPLICADOS ---
 stored_history = load_history()
 
 user_adjustments = {uid: 0.0 for uid in user_names.keys()}
@@ -343,7 +356,7 @@ def extract_round_id(item, el):
   return None
 
 
-# 1. Procesar /transfers
+# 1. Procesar /transfers (Fuente oficial de compras y ventas)
 transfers = (
     transfers_resp.get("data", [])
     if isinstance(transfers_resp, dict)
@@ -368,7 +381,9 @@ if isinstance(transfers, list):
     if b_id and b_id in user_adjustments:
       register_event(f"tr_b_{t_id}", b_id, -amt, "Compra de Jugador")
 
-# 2. Procesar /board (Muro de la liga)
+# 2. Procesar /board (Muro de la liga: SOLO primas, abonos y bonificaciones)
+TRANSFER_EVENT_TYPES = {"transfer", "transfers", "market", "clause"}
+
 board = board_resp.get("data", []) if isinstance(board_resp, dict) else []
 if isinstance(board, list):
   for i, item in enumerate(board):
@@ -376,6 +391,10 @@ if isinstance(board, list):
       continue
 
     type_event = item.get("type", "evento")
+    # TAREA CLAVE: Ignorar eventos de fichajes/mercado del muro para NO duplicar con /transfers
+    if type_event in TRANSFER_EVENT_TYPES:
+      continue
+
     has_real_id = bool(item.get("id"))
     b_id_base = str(item.get("id") or f"bd_{item.get('date', '')}_{type_event}")
 
@@ -397,12 +416,11 @@ if isinstance(board, list):
       if amt <= 0:
         continue
 
-      s_id = parse_entity_id(el.get("from"))
-      b_id = parse_entity_id(el.get("to"))
       u_id_direct = (
           parse_entity_id(el.get("user"))
           or parse_entity_id(el.get("userID"))
           or parse_entity_id(el.get("id"))
+          or parse_entity_id(el.get("to"))
       )
 
       rnd_id = extract_round_id(item, el)
@@ -410,43 +428,7 @@ if isinstance(board, list):
           type_event in ["round", "roundBonus", "bonus"] or rnd_id is not None
       )
 
-      if (
-          s_id
-          and b_id
-          and s_id in user_adjustments
-          and b_id in user_adjustments
-      ):
-        register_event(
-            f"bd_s_{b_id_base}_{j}",
-            s_id,
-            amt,
-            f"Venta mánager ({type_event})",
-            overwrite=has_real_id,
-        )
-        register_event(
-            f"bd_b_{b_id_base}_{j}",
-            b_id,
-            -amt,
-            f"Compra mánager ({type_event})",
-            overwrite=has_real_id,
-        )
-      elif s_id and s_id in user_adjustments and not b_id:
-        register_event(
-            f"bd_s_{b_id_base}_{j}",
-            s_id,
-            amt,
-            f"Venta a Mercado ({type_event})",
-            overwrite=has_real_id,
-        )
-      elif b_id and b_id in user_adjustments and not s_id:
-        register_event(
-            f"bd_b_{b_id_base}_{j}",
-            b_id,
-            -amt,
-            f"Compra a Mercado ({type_event})",
-            overwrite=has_real_id,
-        )
-      elif u_id_direct and u_id_direct in user_adjustments:
+      if u_id_direct and u_id_direct in user_adjustments:
         if is_round_bonus and rnd_id:
           # Clave fija vinculada al número de jornada y al mánager para actualizar primas aplazadas
           event_key = f"bd_round_{rnd_id}_{u_id_direct}"
