@@ -17,7 +17,6 @@ st.title("⚽ Monitor Financiero Biwenger")
 # --- HISTORIAL PERSISTENTE EN DISCO ---
 HISTORY_FILE = "biwenger_history.json"
 
-# --- BOTÓN DE EMERGENCIA PARA RESETEAR ---
 if st.sidebar.button("⚠️ RESETEAR HISTORIAL (Borrar JSON)"):
   if os.path.exists(HISTORY_FILE):
     os.remove(HISTORY_FILE)
@@ -32,7 +31,6 @@ def load_history():
     try:
       with open(HISTORY_FILE, "r", encoding="utf-8") as f:
         data = json.load(f)
-        # Limpiar registros obsoletos de la API /transfers para usar solo el muro
         return {k: v for k, v in data.items() if not k.startswith("tr_")}
     except Exception:
       return {}
@@ -114,20 +112,20 @@ if st.button("🔄 Recargar Datos"):
   st.cache_data.clear()
   st.rerun()
 
-# --- VALORES DE REFERENCIA / DÍA 1 Y ORDEN DE USUARIOS ---
+# --- ORDEN PERSONALIZADO Y VALORES DE REFERENCIA ---
 CUSTOM_USER_ORDER = [
-    "athletik81",
-    "ring014",
     "tubu",
-    "marroba",
-    "yoqsetio xdxd",
-    "nitwolf",
-    "nistalikus",
+    "ring014",
     "gran gravessen",
+    "marroba",
     "moltisanti",
-    "zoropurgui",
     "_caesar_",
     "nitrorx",
+    "nitwolf",
+    "athletik81",
+    "nistalikus",
+    "zoropurgui",
+    "yoqsetio xdxd",
 ]
 
 DAY_ONE_VALS = {
@@ -135,7 +133,6 @@ DAY_ONE_VALS = {
     "ring014": 21580000.0,
     "tubu": 21570000.0,
     "marroba": 21560000.0,
-    "zhukkov": 21560000.0,
     "nitwolf": 21550000.0,
     "yoqsetio xdxd": 21550000.0,
     "nistalikus": 21550000.0,
@@ -163,7 +160,7 @@ def get_user_rank(name):
   return 999
 
 
-# --- EXTRACCIÓN Y MAPEO UNIVERSAL DE USUARIOS ---
+# --- MAPEO UNIVERSAL DE USUARIOS Y LECTURA DIRECTA DE SALDO ---
 raw_list = []
 
 s_data = (
@@ -187,6 +184,7 @@ for key_name in ["standings", "users", "members"]:
 user_names = {}
 user_lookup = {}
 current_vm_data = {}
+direct_cash_data = {}
 
 for item in raw_list:
   if not isinstance(item, dict):
@@ -209,6 +207,16 @@ for item in raw_list:
       user_lookup[str(uname).lower().strip()] = canonical_uid
       user_lookup[str(uname).strip()] = canonical_uid
 
+    # Intento de extracción directa de saldo si la API lo envía
+    for cash_key in ["cash", "balance", "money", "dinero"]:
+      if cash_key in item and item[cash_key] is not None:
+        try:
+          direct_cash_data[canonical_uid] = float(item[cash_key])
+          break
+        except:
+          pass
+
+    # Valor de equipo
     t_val = None
     for k in ["teamValue", "value", "marketValue", "price", "team_value"]:
       if k in item and item[k] is not None:
@@ -225,7 +233,6 @@ for item in raw_list:
 
 
 def resolve_user(ent):
-  """Resuelve cualquier representación de mánager al ID canónico."""
   if ent is None:
     return None
   if isinstance(ent, dict):
@@ -246,7 +253,7 @@ def resolve_user(ent):
   return None
 
 
-# --- PROCESAMIENTO OCR MEJORADO (TESSERACT POR FILAS) ---
+# --- OCR TESSERACT POR FILAS ---
 if uploaded_file is not None:
   st.write("🔍 Leyendo captura por filas con Tesseract...")
   try:
@@ -303,14 +310,13 @@ if not user_names:
       current_vm_data[uid] = val
 
 
-# --- CARGAR Y PROCESAR HISTORIAL DEL MURO ---
+# --- HISTORIAL DEL MURO ---
 stored_history = load_history()
 user_adjustments = {uid: 0.0 for uid in user_names.keys()}
 detected_events_log = []
 
 
 def register_event(event_key, uid, amt, desc, overwrite=False):
-  """Registra un evento financiero."""
   if uid in user_adjustments:
     if event_key not in stored_history or overwrite:
       stored_history[event_key] = {
@@ -322,7 +328,6 @@ def register_event(event_key, uid, amt, desc, overwrite=False):
 
 
 def extract_round_id(item, el):
-  """Extrae el número de jornada."""
   rnd = item.get("round") or el.get("round")
   if isinstance(rnd, dict):
     r_val = rnd.get("id") or rnd.get("name") or rnd.get("round")
@@ -345,7 +350,6 @@ def extract_round_id(item, el):
   return None
 
 
-# PROCESAR EL MURO DE LA LIGA (Fuente principal de eventos)
 board = board_resp.get("data", []) if isinstance(board_resp, dict) else []
 if isinstance(board, list):
   for item in board:
@@ -387,7 +391,6 @@ if isinstance(board, list):
           type_event in ["round", "roundBonus", "bonus"] or rnd_id is not None
       )
 
-      # 1. Movimientos de Mercado / Fichajes / Cláusulas
       if type_event in ["transfer", "transfers", "market", "clause"] or (
           s_id or b_id
       ):
@@ -431,7 +434,6 @@ if isinstance(board, list):
               overwrite=has_real_id,
           )
 
-      # 2. Primas por Jornada
       elif is_round_bonus and rnd_id:
         u_target = u_id_direct or b_id or s_id
         if u_target:
@@ -439,7 +441,6 @@ if isinstance(board, list):
           desc = f"Prima Jornada {rnd_id}"
           register_event(event_key, u_target, amt, desc, overwrite=True)
 
-      # 3. Abonos / Primas manuales
       else:
         u_target = u_id_direct or b_id or s_id
         if u_target:
@@ -449,10 +450,8 @@ if isinstance(board, list):
               event_key, u_target, amt, desc, overwrite=has_real_id
           )
 
-# Guardar historial consolidado
 save_history(stored_history)
 
-# Sumar importes para cada mánager
 for ev_id, ev_data in stored_history.items():
   uid = ev_data.get("uid")
   amt = ev_data.get("amount", 0.0)
@@ -465,24 +464,31 @@ for ev_id, ev_data in stored_history.items():
         "Descripción": desc,
     })
 
-# --- CORRECCIÓN MANUAL PERMANENTE (-280.000 € A YOQSETIO XDXD) ---
-MANUAL_CORRECTIONS = {
-    "yoqsetio xdxd": -280000.0,
+# --- AJUSTES DE MOVIMIENTOS HISTÓRICOS ANTERIORES AL LÍMITE DE 500 EVENTOS ---
+HISTORICAL_OFFSETS = {
+    "ring014": -1718300.0,
+    "moltisanti": -3888000.0,
 }
 
 for uid, name in user_names.items():
   name_lower = str(name).lower().strip()
-  for target_key, correction_amt in MANUAL_CORRECTIONS.items():
+  for target_key, offset_amt in HISTORICAL_OFFSETS.items():
     if target_key in name_lower:
-      user_adjustments[uid] += correction_amt
+      user_adjustments[uid] += offset_amt
 
 # --- CONSTRUCCIÓN DE LA TABLA PRINCIPAL ---
 records = []
 for uid, name in user_names.items():
   v_inicial = get_day_one_val(name)
   v_actual = current_vm_data.get(uid, v_inicial)
-  ajuste = user_adjustments.get(uid, 0.0)
-  saldo_real = (INITIAL_TOTAL - v_inicial) + ajuste
+
+  # Prioridad 1: Saldo devuelto directamente por la API
+  # Prioridad 2: Cálculo por historial de movimientos acumulados
+  if uid in direct_cash_data:
+    saldo_real = direct_cash_data[uid]
+  else:
+    ajuste = user_adjustments.get(uid, 0.0)
+    saldo_real = (INITIAL_TOTAL - v_inicial) + ajuste
 
   records.append({
       "UID": uid,
@@ -490,7 +496,7 @@ for uid, name in user_names.items():
       "Valor actual del equipo": v_actual,
       "Valor de equipo día 1": v_inicial,
       "Dinero en caja (calculado)": saldo_real,
-      "Balance (ajuste)": ajuste,
+      "Balance (ajuste)": user_adjustments.get(uid, 0.0),
   })
 
 if records:
