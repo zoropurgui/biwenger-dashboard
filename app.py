@@ -143,6 +143,53 @@ DAY_ONE_VALS = {
     "nitrorx": 21490000.0,
 }
 
+# --- SNAPSHOT DE REFERENCIA EXACTA (DATOS EXTRAÍDOS DE TU CAPTURA DE PANTALLA) ---
+SNAPSHOT_CASH = {
+    "tubu": -5769943.0,
+    "gran gravessen": -3226941.0,
+    "ring014": -2441128.0,
+    "moltisanti": -44340.0,
+    "_caesar_": 213600.0,
+    "nitrorx": 1081510.0,
+    "nitwolf": 2514250.0,
+    "athletik81": 2790047.0,
+    "marroba": 2993760.0,
+    "nistalikus": 5612070.0,
+    "zoropurgui": 5874214.0,
+    "yoqsetio xdxd": 10448725.0,
+}
+
+SNAPSHOT_TEAM_VALUE = {
+    "tubu": 45740000.0,
+    "gran gravessen": 41050000.0,
+    "ring014": 43400000.0,
+    "moltisanti": 41530000.0,
+    "_caesar_": 38260000.0,
+    "nitrorx": 37420000.0,
+    "nitwolf": 34560000.0,
+    "athletik81": 35140000.0,
+    "marroba": 36690000.0,
+    "nistalikus": 35700000.0,
+    "zoropurgui": 38110000.0,
+    "yoqsetio xdxd": 30680000.0,
+}
+
+
+def get_snapshot_cash(name):
+  n_lower = str(name).lower().strip()
+  for s_key, s_v in SNAPSHOT_CASH.items():
+    if s_key in n_lower:
+      return s_v
+  return 0.0
+
+
+def get_snapshot_team_val(name):
+  n_lower = str(name).lower().strip()
+  for s_key, s_v in SNAPSHOT_TEAM_VALUE.items():
+    if s_key in n_lower:
+      return s_v
+  return 21500000.0
+
 
 def get_day_one_val(name):
   n_lower = str(name).lower().strip()
@@ -462,10 +509,8 @@ for ev_id, ev_data in stored_history.items():
         "Descripción": desc,
     })
 
-# --- AJUSTES MANUALES EXCLUSIVOS PARA CASOS FUERA DEL LÍMITE DE API ---
-HISTORICAL_OFFSETS = {
-    "moltisanti": -3888000.0,
-}
+# --- AJUSTES MANUALES ADICIONALES (SI FUERA NECESARIO EN EL FUTURO) ---
+HISTORICAL_OFFSETS = {}
 
 for uid, name in user_names.items():
   name_lower = str(name).lower().strip()
@@ -477,13 +522,14 @@ for uid, name in user_names.items():
 records = []
 for uid, name in user_names.items():
   v_inicial = get_day_one_val(name)
-  v_actual = current_vm_data.get(uid, v_inicial)
+  v_actual = current_vm_data.get(uid, get_snapshot_team_val(name))
 
+  base_cash = get_snapshot_cash(name)
   if uid in direct_cash_data:
     saldo_real = direct_cash_data[uid]
   else:
     ajuste = user_adjustments.get(uid, 0.0)
-    saldo_real = (INITIAL_TOTAL - v_inicial) + ajuste
+    saldo_real = base_cash + ajuste
 
   records.append({
       "UID": uid,
