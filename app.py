@@ -143,7 +143,7 @@ DAY_ONE_VALS = {
     "nitrorx": 21490000.0,
 }
 
-# --- SNAPSHOT DE REFERENCIA EXACTA (DATOS EXTRAÍDOS DE TU CAPTURA DE PANTALLA) ---
+# --- SNAPSHOT DE REFERENCIA EXACTA DE LA CAPTURA ---
 SNAPSHOT_CASH = {
     "tubu": -5769943.0,
     "gran gravessen": -3226941.0,
@@ -357,18 +357,21 @@ if not user_names:
 
 # --- HISTORIAL DEL MURO ---
 stored_history = load_history()
-user_adjustments = {uid: 0.0 for uid in user_names.keys()}
+new_user_adjustments = {uid: 0.0 for uid in user_names.keys()}
 detected_events_log = []
 
 
-def register_event(event_key, uid, amt, desc, overwrite=False):
-  if uid in user_adjustments:
+def register_event(
+    event_key, uid, amt, desc, overwrite=False, is_post_snapshot=False
+):
+  if uid in user_names:
     if event_key not in stored_history or overwrite:
       stored_history[event_key] = {
           "uid": str(uid),
           "amount": amt,
           "description": desc,
           "user_name": user_names.get(str(uid), str(uid)),
+          "post_snapshot": is_post_snapshot,
       }
 
 
@@ -501,22 +504,16 @@ for ev_id, ev_data in stored_history.items():
   uid = ev_data.get("uid")
   amt = ev_data.get("amount", 0.0)
   desc = ev_data.get("description", "")
-  if uid in user_adjustments:
-    user_adjustments[uid] += amt
+  is_post = ev_data.get("post_snapshot", False)
+
+  if uid in user_names:
+    if is_post:
+      new_user_adjustments[uid] += amt
     detected_events_log.append({
         "Usuario": user_names.get(uid, ev_data.get("user_name", uid)),
         "Importe (€)": amt,
         "Descripción": desc,
     })
-
-# --- AJUSTES MANUALES ADICIONALES (SI FUERA NECESARIO EN EL FUTURO) ---
-HISTORICAL_OFFSETS = {}
-
-for uid, name in user_names.items():
-  name_lower = str(name).lower().strip()
-  for target_key, offset_amt in HISTORICAL_OFFSETS.items():
-    if target_key in name_lower:
-      user_adjustments[uid] += offset_amt
 
 # --- CONSTRUCCIÓN DE LA TABLA PRINCIPAL ---
 records = []
@@ -525,11 +522,8 @@ for uid, name in user_names.items():
   v_actual = current_vm_data.get(uid, get_snapshot_team_val(name))
 
   base_cash = get_snapshot_cash(name)
-  if uid in direct_cash_data:
-    saldo_real = direct_cash_data[uid]
-  else:
-    ajuste = user_adjustments.get(uid, 0.0)
-    saldo_real = base_cash + ajuste
+  nuevo_ajuste = new_user_adjustments.get(uid, 0.0)
+  saldo_real = base_cash + nuevo_ajuste
 
   records.append({
       "UID": uid,
@@ -537,7 +531,7 @@ for uid, name in user_names.items():
       "Valor actual del equipo": v_actual,
       "Valor de equipo día 1": v_inicial,
       "Dinero en caja (calculado)": saldo_real,
-      "Balance (ajuste)": user_adjustments.get(uid, 0.0),
+      "Balance (ajuste)": nuevo_ajuste,
   })
 
 if records:
