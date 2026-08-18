@@ -160,7 +160,7 @@ def get_user_rank(name):
   return 999
 
 
-# --- MAPEO UNIVERSAL DE USUARIOS Y LECTURA DIRECTA DE SALDO ---
+# --- MAPEO UNIVERSAL DE USUARIOS ---
 raw_list = []
 
 s_data = (
@@ -207,7 +207,6 @@ for item in raw_list:
       user_lookup[str(uname).lower().strip()] = canonical_uid
       user_lookup[str(uname).strip()] = canonical_uid
 
-    # Intento de extracción directa de saldo si la API lo envía
     for cash_key in ["cash", "balance", "money", "dinero"]:
       if cash_key in item and item[cash_key] is not None:
         try:
@@ -216,7 +215,6 @@ for item in raw_list:
         except:
           pass
 
-    # Valor de equipo
     t_val = None
     for k in ["teamValue", "value", "marketValue", "price", "team_value"]:
       if k in item and item[k] is not None:
@@ -464,9 +462,8 @@ for ev_id, ev_data in stored_history.items():
         "Descripción": desc,
     })
 
-# --- AJUSTES DE MOVIMIENTOS HISTÓRICOS ANTERIORES AL LÍMITE DE 500 EVENTOS ---
+# --- AJUSTES MANUALES EXCLUSIVOS PARA CASOS FUERA DEL LÍMITE DE API ---
 HISTORICAL_OFFSETS = {
-    "ring014": -1718300.0,
     "moltisanti": -3888000.0,
 }
 
@@ -482,8 +479,6 @@ for uid, name in user_names.items():
   v_inicial = get_day_one_val(name)
   v_actual = current_vm_data.get(uid, v_inicial)
 
-  # Prioridad 1: Saldo devuelto directamente por la API
-  # Prioridad 2: Cálculo por historial de movimientos acumulados
   if uid in direct_cash_data:
     saldo_real = direct_cash_data[uid]
   else:
